@@ -55,3 +55,9 @@ py_repositories()
 load("@rules_python//python:pip.bzl", "pip_repositories")
 
 pip_repositories()
+
+git_repository(
+    name = "subpar",
+    remote = "https://github.com/google/subpar",
+    tag = "1.0.0",
+)
