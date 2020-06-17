@@ -22,4 +22,5 @@ py_binary(
     imports = [
         ":codegen_pwpb",
     ],
+    visibility = ["//visibility:public"],
 )
