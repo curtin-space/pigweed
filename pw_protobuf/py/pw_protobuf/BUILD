@@ -21,5 +21,6 @@ py_binary(
         "proto_tree.py",
         "codegen_pwpb.py"
     ],
+    imports = ["."],
     visibility = ["//visibility:public"],
 )
