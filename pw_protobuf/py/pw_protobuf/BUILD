@@ -1,4 +1,4 @@
-#load("@rules_python//python:defs.bzl", "py_library","py_binary")
+load("@subpar//:subpar.bzl", "par_binary")
 
 py_library(
     name = "proto_tree",
@@ -13,7 +13,7 @@ py_library(
     ],
 )
 
-py_binary(
+par_binary(
     name = "plugin",
     main = "plugin.py",
     srcs = [
