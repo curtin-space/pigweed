@@ -209,7 +209,7 @@ class PackedDoubleMethod(PackedMethod):
     """Method which writes a packed list of doubles."""
 
     def params(self) -> List[Tuple[str, str]]:
-        return [("span<const double>", "values")]
+        return [("pw::span<const double>", "values")]
 
     def _encoder_fn(self) -> str:
         return "WritePackedDouble"
@@ -229,7 +229,7 @@ class PackedFloatMethod(PackedMethod):
     """Method which writes a packed list of floats."""
 
     def params(self) -> List[Tuple[str, str]]:
-        return [("span<const float>", "values")]
+        return [("pw::span<const float>", "values")]
 
     def _encoder_fn(self) -> str:
         return "WritePackedFloat"
@@ -249,7 +249,7 @@ class PackedInt32Method(PackedMethod):
     """Method which writes a packed list of int32."""
 
     def params(self) -> List[Tuple[str, str]]:
-        return [("span<const int32_t>", "values")]
+        return [("pw::span<const int32_t>", "values")]
 
     def _encoder_fn(self) -> str:
         return "WritePackedInt32"
@@ -269,7 +269,7 @@ class PackedSint32Method(PackedMethod):
     """Method which writes a packed list of sint32."""
 
     def params(self) -> List[Tuple[str, str]]:
-        return [("span<const int32_t>", "values")]
+        return [("pw::span<const int32_t>", "values")]
 
     def _encoder_fn(self) -> str:
         return "WritePackedSint32"
@@ -289,7 +289,7 @@ class PackedSfixed32Method(PackedMethod):
     """Method which writes a packed list of sfixed32."""
 
     def params(self) -> List[Tuple[str, str]]:
-        return [("span<const int32_t>", "values")]
+        return [("pw::span<const int32_t>", "values")]
 
     def _encoder_fn(self) -> str:
         return "WritePackedSfixed32"
@@ -309,7 +309,7 @@ class PackedInt64Method(PackedMethod):
     """Method which writes a proto int64 value."""
 
     def params(self) -> List[Tuple[str, str]]:
-        return [("span<const int64_t>", "values")]
+        return [("pw::span<const int64_t>", "values")]
 
     def _encoder_fn(self) -> str:
         return "WritePackedInt64"
@@ -329,7 +329,7 @@ class PackedSint64Method(PackedMethod):
     """Method which writes a proto sint64 value."""
 
     def params(self) -> List[Tuple[str, str]]:
-        return [("span<const int64_t>", "values")]
+        return [("pw::span<const int64_t>", "values")]
 
     def _encoder_fn(self) -> str:
         return "WritePackedSint64"
@@ -349,7 +349,7 @@ class PackedSfixed64Method(PackedMethod):
     """Method which writes a proto sfixed64 value."""
 
     def params(self) -> List[Tuple[str, str]]:
-        return [("span<const int64_t>", "values")]
+        return [("pw::span<const int64_t>", "values")]
 
     def _encoder_fn(self) -> str:
         return "WritePackedSfixed4"
@@ -369,7 +369,7 @@ class PackedUint32Method(PackedMethod):
     """Method which writes a proto uint32 value."""
 
     def params(self) -> List[Tuple[str, str]]:
-        return [("span<const uint32_t>", "values")]
+        return [("pw::span<const uint32_t>", "values")]
 
     def _encoder_fn(self) -> str:
         return "WritePackedUint32"
@@ -389,7 +389,7 @@ class PackedFixed32Method(PackedMethod):
     """Method which writes a proto fixed32 value."""
 
     def params(self) -> List[Tuple[str, str]]:
-        return [("span<const uint32_t>", "values")]
+        return [("pw::span<const uint32_t>", "values")]
 
     def _encoder_fn(self) -> str:
         return "WritePackedFixed32"
@@ -409,7 +409,7 @@ class PackedUint64Method(PackedMethod):
     """Method which writes a proto uint64 value."""
 
     def params(self) -> List[Tuple[str, str]]:
-        return [("span<const uint64_t>", "values")]
+        return [("pw::span<const uint64_t>", "values")]
 
     def _encoder_fn(self) -> str:
         return "WritePackedUint64"
@@ -429,7 +429,7 @@ class PackedFixed64Method(PackedMethod):
     """Method which writes a proto fixed64 value."""
 
     def params(self) -> List[Tuple[str, str]]:
-        return [("span<const uint64_t>", "values")]
+        return [("pw::span<const uint64_t>", "values")]
 
     def _encoder_fn(self) -> str:
         return "WritePackedFixed64"
@@ -449,7 +449,7 @@ class BytesMethod(WriteMethod):
     """Method which writes a proto bytes value."""
 
     def params(self) -> List[Tuple[str, str]]:
-        return [("span<const std::byte>", "value")]
+        return [("pw::span<const std::byte>", "value")]
 
     def _encoder_fn(self) -> str:
         return "WriteBytes"
