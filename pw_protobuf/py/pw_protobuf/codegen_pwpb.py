@@ -28,11 +28,11 @@ from pw_protobuf.proto_tree import ProtoEnum, ProtoMessage, ProtoMessageField
 from pw_protobuf.proto_tree import ProtoNode
 from pw_protobuf.proto_tree import build_node_tree
 
-PLUGIN_NAME = "pw_protobuf"
-PLUGIN_VERSION = "0.1.0"
+PLUGIN_NAME = 'pw_protobuf'
+PLUGIN_VERSION = '0.1.0'
 
-PROTO_H_EXTENSION = ".pwpb.h"
-PROTO_CC_EXTENSION = ".pwpb.cc"
+PROTO_H_EXTENSION = '.pwpb.h'
+PROTO_CC_EXTENSION = '.pwpb.cc'
 
 PROTOBUF_NAMESPACE = '::pw::protobuf'
 
@@ -67,8 +67,12 @@ def debug_print(*args, **kwargs):
 
 class ProtoMethod(abc.ABC):
     """Base class for a C++ method for a field in a protobuf message."""
-
-    def __init__(self, field: ProtoMessageField, scope: ProtoNode, root: ProtoNode):
+    def __init__(
+        self,
+        field: ProtoMessageField,
+        scope: ProtoNode,
+        root: ProtoNode,
+    ):
         """Creates an instance of a method.
 
         Args:
@@ -125,10 +129,11 @@ class ProtoMethod(abc.ABC):
         return True
 
     def param_string(self) -> str:
-        return ", ".join([f"{type} {name}" for type, name in self.params()])
+        return ', '.join([f'{type} {name}' for type, name in self.params()])
 
     def field_cast(self) -> str:
-        return "static_cast<uint32_t>(Fields::{})".format(self._field.enum_name())
+        return 'static_cast<uint32_t>(Fields::{})'.format(
+            self._field.enum_name())
 
     def _relative_type_namespace(self, from_root: bool = False) -> str:
         """Returns relative namespace between method's scope and field type."""
@@ -149,9 +154,8 @@ class ProtoMethod(abc.ABC):
 
 class SubMessageMethod(ProtoMethod):
     """Method which returns a sub-message encoder."""
-
     def name(self) -> str:
-        return "Get{}Encoder".format(self._field.name())
+        return 'Get{}Encoder'.format(self._field.name())
 
     def return_type(self, from_root: bool = False) -> str:
         return '{}::StreamEncoder'.format(
@@ -181,12 +185,11 @@ class WriteMethod(ProtoMethod):
         }
 
     """
-
     def name(self) -> str:
-        return "Write{}".format(self._field.name())
+        return 'Write{}'.format(self._field.name())
 
     def return_type(self, from_root: bool = False) -> str:
-        return "::pw::Status"
+        return '::pw::Status'
 
     def body(self) -> List[str]:
         params = ', '.join([pair[1] for pair in self.params()])
@@ -216,7 +219,6 @@ class PackedMethod(WriteMethod):
 
     Same as a WriteMethod, but is only generated for repeated fields.
     """
-
     def should_appear(self) -> bool:
         return self._field.is_repeated()
 
@@ -232,289 +234,260 @@ class PackedMethod(WriteMethod):
 
 class DoubleMethod(WriteMethod):
     """Method which writes a proto double value."""
-
     def params(self) -> List[Tuple[str, str]]:
-        return [("double", "value")]
+        return [('double', 'value')]
 
     def _encoder_fn(self) -> str:
-        return "WriteDouble"
+        return 'WriteDouble'
 
 
 class PackedDoubleMethod(PackedMethod):
     """Method which writes a packed list of doubles."""
-
     def params(self) -> List[Tuple[str, str]]:
         return [('std::span<const double>', 'values')]
 
     def _encoder_fn(self) -> str:
-        return "WritePackedDouble"
+        return 'WritePackedDouble'
 
 
 class FloatMethod(WriteMethod):
     """Method which writes a proto float value."""
-
     def params(self) -> List[Tuple[str, str]]:
-        return [("float", "value")]
+        return [('float', 'value')]
 
     def _encoder_fn(self) -> str:
-        return "WriteFloat"
+        return 'WriteFloat'
 
 
 class PackedFloatMethod(PackedMethod):
     """Method which writes a packed list of floats."""
-
     def params(self) -> List[Tuple[str, str]]:
         return [('std::span<const float>', 'values')]
 
     def _encoder_fn(self) -> str:
-        return "WritePackedFloat"
+        return 'WritePackedFloat'
 
 
 class Int32Method(WriteMethod):
     """Method which writes a proto int32 value."""
-
     def params(self) -> List[Tuple[str, str]]:
-        return [("int32_t", "value")]
+        return [('int32_t', 'value')]
 
     def _encoder_fn(self) -> str:
-        return "WriteInt32"
+        return 'WriteInt32'
 
 
 class PackedInt32Method(PackedMethod):
     """Method which writes a packed list of int32."""
-
     def params(self) -> List[Tuple[str, str]]:
         return [('std::span<const int32_t>', 'values')]
 
     def _encoder_fn(self) -> str:
-        return "WritePackedInt32"
+        return 'WritePackedInt32'
 
 
 class Sint32Method(WriteMethod):
     """Method which writes a proto sint32 value."""
-
     def params(self) -> List[Tuple[str, str]]:
-        return [("int32_t", "value")]
+        return [('int32_t', 'value')]
 
     def _encoder_fn(self) -> str:
-        return "WriteSint32"
+        return 'WriteSint32'
 
 
 class PackedSint32Method(PackedMethod):
     """Method which writes a packed list of sint32."""
-
     def params(self) -> List[Tuple[str, str]]:
         return [('std::span<const int32_t>', 'values')]
 
     def _encoder_fn(self) -> str:
-        return "WritePackedSint32"
+        return 'WritePackedSint32'
 
 
 class Sfixed32Method(WriteMethod):
     """Method which writes a proto sfixed32 value."""
-
     def params(self) -> List[Tuple[str, str]]:
-        return [("int32_t", "value")]
+        return [('int32_t', 'value')]
 
     def _encoder_fn(self) -> str:
-        return "WriteSfixed32"
+        return 'WriteSfixed32'
 
 
 class PackedSfixed32Method(PackedMethod):
     """Method which writes a packed list of sfixed32."""
-
     def params(self) -> List[Tuple[str, str]]:
         return [('std::span<const int32_t>', 'values')]
 
     def _encoder_fn(self) -> str:
-        return "WritePackedSfixed32"
+        return 'WritePackedSfixed32'
 
 
 class Int64Method(WriteMethod):
     """Method which writes a proto int64 value."""
-
     def params(self) -> List[Tuple[str, str]]:
-        return [("int64_t", "value")]
+        return [('int64_t', 'value')]
 
     def _encoder_fn(self) -> str:
-        return "WriteInt64"
+        return 'WriteInt64'
 
 
 class PackedInt64Method(PackedMethod):
     """Method which writes a proto int64 value."""
-
     def params(self) -> List[Tuple[str, str]]:
         return [('std::span<const int64_t>', 'values')]
 
     def _encoder_fn(self) -> str:
-        return "WritePackedInt64"
+        return 'WritePackedInt64'
 
 
 class Sint64Method(WriteMethod):
     """Method which writes a proto sint64 value."""
-
     def params(self) -> List[Tuple[str, str]]:
-        return [("int64_t", "value")]
+        return [('int64_t', 'value')]
 
     def _encoder_fn(self) -> str:
-        return "WriteSint64"
+        return 'WriteSint64'
 
 
 class PackedSint64Method(PackedMethod):
     """Method which writes a proto sint64 value."""
-
     def params(self) -> List[Tuple[str, str]]:
         return [('std::span<const int64_t>', 'values')]
 
     def _encoder_fn(self) -> str:
-        return "WritePackedSint64"
+        return 'WritePackedSint64'
 
 
 class Sfixed64Method(WriteMethod):
     """Method which writes a proto sfixed64 value."""
-
     def params(self) -> List[Tuple[str, str]]:
-        return [("int64_t", "value")]
+        return [('int64_t', 'value')]
 
     def _encoder_fn(self) -> str:
-        return "WriteSfixed64"
+        return 'WriteSfixed64'
 
 
 class PackedSfixed64Method(PackedMethod):
     """Method which writes a proto sfixed64 value."""
-
     def params(self) -> List[Tuple[str, str]]:
         return [('std::span<const int64_t>', 'values')]
 
     def _encoder_fn(self) -> str:
-        return "WritePackedSfixed4"
+        return 'WritePackedSfixed4'
 
 
 class Uint32Method(WriteMethod):
     """Method which writes a proto uint32 value."""
-
     def params(self) -> List[Tuple[str, str]]:
-        return [("uint32_t", "value")]
+        return [('uint32_t', 'value')]
 
     def _encoder_fn(self) -> str:
-        return "WriteUint32"
+        return 'WriteUint32'
 
 
 class PackedUint32Method(PackedMethod):
     """Method which writes a proto uint32 value."""
-
     def params(self) -> List[Tuple[str, str]]:
         return [('std::span<const uint32_t>', 'values')]
 
     def _encoder_fn(self) -> str:
-        return "WritePackedUint32"
+        return 'WritePackedUint32'
 
 
 class Fixed32Method(WriteMethod):
     """Method which writes a proto fixed32 value."""
-
     def params(self) -> List[Tuple[str, str]]:
-        return [("uint32_t", "value")]
+        return [('uint32_t', 'value')]
 
     def _encoder_fn(self) -> str:
-        return "WriteFixed32"
+        return 'WriteFixed32'
 
 
 class PackedFixed32Method(PackedMethod):
     """Method which writes a proto fixed32 value."""
-
     def params(self) -> List[Tuple[str, str]]:
         return [('std::span<const uint32_t>', 'values')]
 
     def _encoder_fn(self) -> str:
-        return "WritePackedFixed32"
+        return 'WritePackedFixed32'
 
 
 class Uint64Method(WriteMethod):
     """Method which writes a proto uint64 value."""
-
     def params(self) -> List[Tuple[str, str]]:
-        return [("uint64_t", "value")]
+        return [('uint64_t', 'value')]
 
     def _encoder_fn(self) -> str:
-        return "WriteUint64"
+        return 'WriteUint64'
 
 
 class PackedUint64Method(PackedMethod):
     """Method which writes a proto uint64 value."""
-
     def params(self) -> List[Tuple[str, str]]:
         return [('std::span<const uint64_t>', 'values')]
 
     def _encoder_fn(self) -> str:
-        return "WritePackedUint64"
+        return 'WritePackedUint64'
 
 
 class Fixed64Method(WriteMethod):
     """Method which writes a proto fixed64 value."""
-
     def params(self) -> List[Tuple[str, str]]:
-        return [("uint64_t", "value")]
+        return [('uint64_t', 'value')]
 
     def _encoder_fn(self) -> str:
-        return "WriteFixed64"
+        return 'WriteFixed64'
 
 
 class PackedFixed64Method(PackedMethod):
     """Method which writes a proto fixed64 value."""
-
     def params(self) -> List[Tuple[str, str]]:
         return [('std::span<const uint64_t>', 'values')]
 
     def _encoder_fn(self) -> str:
-        return "WritePackedFixed64"
+        return 'WritePackedFixed64'
 
 
 class BoolMethod(WriteMethod):
     """Method which writes a proto bool value."""
-
     def params(self) -> List[Tuple[str, str]]:
-        return [("bool", "value")]
+        return [('bool', 'value')]
 
     def _encoder_fn(self) -> str:
-        return "WriteBool"
+        return 'WriteBool'
 
 
 class BytesMethod(WriteMethod):
     """Method which writes a proto bytes value."""
-
     def params(self) -> List[Tuple[str, str]]:
         return [('std::span<const std::byte>', 'value')]
 
     def _encoder_fn(self) -> str:
-        return "WriteBytes"
+        return 'WriteBytes'
 
 
 class StringLenMethod(WriteMethod):
     """Method which writes a proto string value with length."""
-
     def params(self) -> List[Tuple[str, str]]:
-        return [("const char*", "value"), ("size_t", "len")]
+        return [('const char*', 'value'), ('size_t', 'len')]
 
     def _encoder_fn(self) -> str:
-        return "WriteString"
+        return 'WriteString'
 
 
 class StringMethod(WriteMethod):
     """Method which writes a proto string value."""
-
     def params(self) -> List[Tuple[str, str]]:
         return [('std::string_view', 'value')]
 
     def _encoder_fn(self) -> str:
-        return "WriteString"
+        return 'WriteString'
 
 
 class EnumMethod(WriteMethod):
     """Method which writes a proto enum value."""
-
     def params(self) -> List[Tuple[str, str]]:
-        return [(self._relative_type_namespace(), "value")]
+        return [(self._relative_type_namespace(), 'value')]
 
     def body(self) -> List[str]:
         line = 'return WriteUint32(' \
@@ -530,33 +503,35 @@ class EnumMethod(WriteMethod):
 
 # Mapping of protobuf field types to their method definitions.
 PROTO_FIELD_METHODS: Dict[int, List] = {
-    descriptor_pb2.FieldDescriptorProto.TYPE_DOUBLE: [DoubleMethod, PackedDoubleMethod],
-    descriptor_pb2.FieldDescriptorProto.TYPE_FLOAT: [FloatMethod, PackedFloatMethod],
-    descriptor_pb2.FieldDescriptorProto.TYPE_INT32: [Int32Method, PackedInt32Method],
-    descriptor_pb2.FieldDescriptorProto.TYPE_SINT32: [Sint32Method, PackedSint32Method],
-    descriptor_pb2.FieldDescriptorProto.TYPE_SFIXED32: [
-        Sfixed32Method,
-        PackedSfixed32Method,
-    ],
-    descriptor_pb2.FieldDescriptorProto.TYPE_INT64: [Int64Method, PackedInt64Method],
-    descriptor_pb2.FieldDescriptorProto.TYPE_SINT64: [Sint64Method, PackedSint64Method],
-    descriptor_pb2.FieldDescriptorProto.TYPE_SFIXED64: [
-        Sfixed64Method,
-        PackedSfixed64Method,
-    ],
-    descriptor_pb2.FieldDescriptorProto.TYPE_UINT32: [Uint32Method, PackedUint32Method],
-    descriptor_pb2.FieldDescriptorProto.TYPE_FIXED32: [
-        Fixed32Method,
-        PackedFixed32Method,
-    ],
-    descriptor_pb2.FieldDescriptorProto.TYPE_UINT64: [Uint64Method, PackedUint64Method],
-    descriptor_pb2.FieldDescriptorProto.TYPE_FIXED64: [
-        Fixed64Method,
-        PackedFixed64Method,
-    ],
+    descriptor_pb2.FieldDescriptorProto.TYPE_DOUBLE:
+    [DoubleMethod, PackedDoubleMethod],
+    descriptor_pb2.FieldDescriptorProto.TYPE_FLOAT:
+    [FloatMethod, PackedFloatMethod],
+    descriptor_pb2.FieldDescriptorProto.TYPE_INT32:
+    [Int32Method, PackedInt32Method],
+    descriptor_pb2.FieldDescriptorProto.TYPE_SINT32:
+    [Sint32Method, PackedSint32Method],
+    descriptor_pb2.FieldDescriptorProto.TYPE_SFIXED32:
+    [Sfixed32Method, PackedSfixed32Method],
+    descriptor_pb2.FieldDescriptorProto.TYPE_INT64:
+    [Int64Method, PackedInt64Method],
+    descriptor_pb2.FieldDescriptorProto.TYPE_SINT64:
+    [Sint64Method, PackedSint64Method],
+    descriptor_pb2.FieldDescriptorProto.TYPE_SFIXED64:
+    [Sfixed64Method, PackedSfixed64Method],
+    descriptor_pb2.FieldDescriptorProto.TYPE_UINT32:
+    [Uint32Method, PackedUint32Method],
+    descriptor_pb2.FieldDescriptorProto.TYPE_FIXED32:
+    [Fixed32Method, PackedFixed32Method],
+    descriptor_pb2.FieldDescriptorProto.TYPE_UINT64:
+    [Uint64Method, PackedUint64Method],
+    descriptor_pb2.FieldDescriptorProto.TYPE_FIXED64:
+    [Fixed64Method, PackedFixed64Method],
     descriptor_pb2.FieldDescriptorProto.TYPE_BOOL: [BoolMethod],
     descriptor_pb2.FieldDescriptorProto.TYPE_BYTES: [BytesMethod],
-    descriptor_pb2.FieldDescriptorProto.TYPE_STRING: [StringLenMethod, StringMethod],
+    descriptor_pb2.FieldDescriptorProto.TYPE_STRING: [
+        StringLenMethod, StringMethod
+    ],
     descriptor_pb2.FieldDescriptorProto.TYPE_MESSAGE: [SubMessageMethod],
     descriptor_pb2.FieldDescriptorProto.TYPE_ENUM: [EnumMethod],
 }
@@ -578,7 +553,7 @@ def generate_code_for_message(message: ProtoMessage, root: ProtoNode,
         f'class {message.cpp_namespace(root)}::{encoder_name} ' \
         f': public {base_class} {{'
     )
-    output.write_line(" public:")
+    output.write_line(' public:')
 
     with output.indent():
         # Inherit the constructors from the base encoder.
@@ -607,23 +582,22 @@ def generate_code_for_message(message: ProtoMessage, root: ProtoNode,
 
                 output.write_line()
                 method_signature = (
-                    f"{method.return_type()} "
-                    f"{method.name()}({method.param_string()})"
-                )
+                    f'{method.return_type()} '
+                    f'{method.name()}({method.param_string()})')
 
                 if not method.in_class_definition():
                     # Method will be defined outside of the class at the end of
                     # the file.
-                    output.write_line(f"{method_signature};")
+                    output.write_line(f'{method_signature};')
                     continue
 
-                output.write_line(f"{method_signature} {{")
+                output.write_line(f'{method_signature} {{')
                 with output.indent():
                     for line in method.body():
                         output.write_line(line)
-                output.write_line("}")
+                output.write_line('}')
 
-    output.write_line("};")
+    output.write_line('};')
 
 
 def define_not_in_class_methods(message: ProtoMessage, root: ProtoNode,
@@ -642,14 +616,13 @@ def define_not_in_class_methods(message: ProtoMessage, root: ProtoNode,
             class_name = (f'{message.cpp_namespace(root)}::'
                           f'{encoder_type.codegen_class_name()}')
             method_signature = (
-                f"inline {method.return_type(from_root=True)} "
-                f"{class_name}::{method.name()}({method.param_string()})"
-            )
-            output.write_line(f"{method_signature} {{")
+                f'inline {method.return_type(from_root=True)} '
+                f'{class_name}::{method.name()}({method.param_string()})')
+            output.write_line(f'{method_signature} {{')
             with output.indent():
                 for line in method.body():
                     output.write_line(line)
-            output.write_line("}")
+            output.write_line('}')
 
 
 def generate_code_for_enum(proto_enum: ProtoEnum, root: ProtoNode,
@@ -669,14 +642,14 @@ def forward_declare(node: ProtoMessage, root: ProtoNode,
     """Generates code forward-declaring entities in a message's namespace."""
     namespace = node.cpp_namespace(root)
     output.write_line()
-    output.write_line(f"namespace {namespace} {{")
+    output.write_line(f'namespace {namespace} {{')
 
     # Define an enum defining each of the message's fields and their numbers.
-    output.write_line("enum class Fields {")
+    output.write_line('enum class Fields {')
     with output.indent():
         for field in node.fields():
-            output.write_line(f"{field.enum_name()} = {field.number()},")
-    output.write_line("};")
+            output.write_line(f'{field.enum_name()} = {field.number()},')
+    output.write_line('};')
 
     # Declare the message's encoder class and all of its enums.
     output.write_line()
@@ -688,7 +661,7 @@ def forward_declare(node: ProtoMessage, root: ProtoNode,
             output.write_line()
             generate_code_for_enum(cast(ProtoEnum, child), node, output)
 
-    output.write_line(f"}}  // namespace {namespace}")
+    output.write_line(f'}}  // namespace {namespace}')
 
 
 def generate_encoder_wrappers(package: ProtoNode, encoder_type: EncoderType,
@@ -713,9 +686,8 @@ def _proto_filename_to_generated_header(proto_file: str) -> str:
     return os.path.splitext(proto_file)[0] + PROTO_H_EXTENSION
 
 
-def generate_code_for_package(
-    file_descriptor_proto, package: ProtoNode, output: OutputFile
-) -> None:
+def generate_code_for_package(file_descriptor_proto, package: ProtoNode,
+                              output: OutputFile) -> None:
     """Generates code for a single .pb.h file corresponding to a .proto file."""
 
     assert package.type() == ProtoNode.Type.PACKAGE
@@ -736,10 +708,10 @@ def generate_code_for_package(
 
     if package.cpp_namespace():
         file_namespace = package.cpp_namespace()
-        if file_namespace.startswith("::"):
+        if file_namespace.startswith('::'):
             file_namespace = file_namespace[2:]
 
-        output.write_line(f"\nnamespace {file_namespace} {{")
+        output.write_line(f'\nnamespace {file_namespace} {{')
 
     for node in package:
         if node.type() == ProtoNode.Type.MESSAGE:
@@ -755,7 +727,7 @@ def generate_code_for_package(
     generate_encoder_wrappers(package, EncoderType.MEMORY, output)
 
     if package.cpp_namespace():
-        output.write_line(f"\n}}  // namespace {package.cpp_namespace()}")
+        output.write_line(f'\n}}  // namespace {package.cpp_namespace()}')
 
 
 def process_proto_file(proto_file) -> Iterable[OutputFile]:

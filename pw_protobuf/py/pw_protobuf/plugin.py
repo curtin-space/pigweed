@@ -25,9 +25,8 @@ from google.protobuf.compiler import plugin_pb2
 from pw_protobuf import codegen_pwpb
 
 
-def process_proto_request(
-    req: plugin_pb2.CodeGeneratorRequest, res: plugin_pb2.CodeGeneratorResponse
-) -> None:
+def process_proto_request(req: plugin_pb2.CodeGeneratorRequest,
+                          res: plugin_pb2.CodeGeneratorResponse) -> None:
     """Handles a protoc CodeGeneratorRequest message.
 
     Generates code for the files in the request and writes the output to the
@@ -64,5 +63,5 @@ def main() -> int:
     return 0
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     sys.exit(main())
