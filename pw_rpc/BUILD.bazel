@@ -104,7 +104,10 @@ pw_cc_library(
         "public/pw_rpc/server_context.h",
         "public/pw_rpc/service.h",
     ],
-    includes = ["public"],
+    includes = [
+        "public",
+        "raw/public",
+    ],
     deps = [
         ":internal_packet_pwpb",
         "//pw_assert",
