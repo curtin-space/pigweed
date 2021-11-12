@@ -3,7 +3,7 @@ compile_commands.json
 out/
 bazel-*
 .presubmit/
-.bootstrap/
+docs/_build
 
 # Editors
 .idea/
@@ -13,11 +13,10 @@ bazel-*
 .clangd/
 *.swp
 *.swo
+*flycheck_*
+*_flymake.*
 
 # Python
-python*-env/
-.python*-env/
-venv/
 *.pyc
 *.egg/
 *.eggs/
@@ -25,6 +24,8 @@ venv/
 .cache/
 .mypy_cache/
 __pycache__/
+build/
+dist/
 
 # PyOxidizer
 pw_env_setup/py/oxidizer/build
@@ -47,13 +48,18 @@ pw_env_setup/py/oxidizer/build
 *_REMOTE_*.txt
 
 # Env Setup
+environment
+.environment
+# TODO(pwbug/216) Remove following lines in this section.
+# Maybe find a way to delete these files before these lines are removed.
+python*-env/
+.python*-env/
 pw_env_setup/.env_setup.sh
 pw_env_setup/.env_setup.bat
 .cipd
 .cargo
+.bootstrap/
 
 # Web Tools
 node_modules
 yarn-error.log
-
-nanopb

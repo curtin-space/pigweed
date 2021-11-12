@@ -13,32 +13,40 @@
 // the License.
 
 #define PW_LOG_MODULE_NAME "KVS"
+#define PW_LOG_LEVEL PW_KVS_LOG_LEVEL
 
 #include "pw_kvs/internal/entry.h"
 
 #include <cinttypes>
 #include <cstring>
 
-#include "pw_kvs_private/macros.h"
+#include "pw_kvs_private/config.h"
 #include "pw_log/log.h"
+#include "pw_status/try.h"
 
 namespace pw::kvs::internal {
 
+static_assert(
+    kMaxFlashAlignment >= Entry::kMinAlignmentBytes,
+    "Flash alignment is required to be at least Entry::kMinAlignmentBytes");
+
+constexpr size_t kWriteBufferSize =
+    std::max(kMaxFlashAlignment, 4 * Entry::kMinAlignmentBytes);
+
 using std::byte;
-using std::string_view;
 
 Status Entry::Read(FlashPartition& partition,
                    Address address,
                    const internal::EntryFormats& formats,
                    Entry* entry) {
   EntryHeader header;
-  TRY(partition.Read(address, sizeof(header), &header));
+  PW_TRY(partition.Read(address, sizeof(header), &header));
 
-  if (partition.AppearsErased(as_bytes(span(&header.magic, 1)))) {
-    return Status::NOT_FOUND;
+  if (partition.AppearsErased(std::as_bytes(std::span(&header.magic, 1)))) {
+    return Status::NotFound();
   }
   if (header.key_length_bytes > kMaxKeyLength) {
-    return Status::DATA_LOSS;
+    return Status::DataLoss();
   }
 
   const EntryFormat* format = formats.Find(header.magic);
@@ -46,11 +54,11 @@ Status Entry::Read(FlashPartition& partition,
     PW_LOG_ERROR("Found corrupt magic: %" PRIx32 " at address %u",
                  header.magic,
                  unsigned(address));
-    return Status::DATA_LOSS;
+    return Status::DataLoss();
   }
 
   *entry = Entry(&partition, address, *format, header);
-  return Status::OK;
+  return OkStatus();
 }
 
 Status Entry::ReadKey(FlashPartition& partition,
@@ -58,7 +66,7 @@ Status Entry::ReadKey(FlashPartition& partition,
                       size_t key_length,
                       char* key) {
   if (key_length == 0u || key_length > kMaxKeyLength) {
-    return Status::DATA_LOSS;
+    return Status::DataLoss();
   }
 
   return partition.Read(address + sizeof(EntryHeader), key_length, key)
@@ -68,8 +76,8 @@ Status Entry::ReadKey(FlashPartition& partition,
 Entry::Entry(FlashPartition& partition,
              Address address,
              const EntryFormat& format,
-             string_view key,
-             span<const byte> value,
+             Key key,
+             std::span<const byte> value,
              uint16_t value_size_bytes,
              uint32_t transaction_id)
     : Entry(&partition,
@@ -83,19 +91,20 @@ Entry::Entry(FlashPartition& partition,
              .value_size_bytes = value_size_bytes,
              .transaction_id = transaction_id}) {
   if (checksum_algo_ != nullptr) {
-    span<const byte> checksum = CalculateChecksum(key, value);
+    std::span<const byte> checksum = CalculateChecksum(key, value);
     std::memcpy(&header_.checksum,
                 checksum.data(),
                 std::min(checksum.size(), sizeof(header_.checksum)));
   }
 }
 
-StatusWithSize Entry::Write(string_view key, span<const byte> value) const {
+StatusWithSize Entry::Write(Key key, std::span<const byte> value) const {
   FlashPartition::Output flash(partition(), address_);
-  return AlignedWrite<64>(
-      flash,
-      alignment_bytes(),
-      {as_bytes(span(&header_, 1)), as_bytes(span(key)), value});
+  return AlignedWrite<kWriteBufferSize>(flash,
+                                        alignment_bytes(),
+                                        {std::as_bytes(std::span(&header_, 1)),
+                                         std::as_bytes(std::span(key)),
+                                         value});
 }
 
 Status Entry::Update(const EntryFormat& new_format,
@@ -120,21 +129,22 @@ StatusWithSize Entry::Copy(Address new_address) const {
                transaction_id());
 
   FlashPartition::Output output(partition(), new_address);
-  AlignedWriterBuffer<4 * kMinAlignmentBytes> writer(alignment_bytes(), output);
+  AlignedWriterBuffer<kWriteBufferSize> writer(alignment_bytes(), output);
 
   // Use this object's header rather than the header in flash of flash, since
   // this Entry may have been updated.
-  TRY_WITH_SIZE(writer.Write(&header_, sizeof(header_)));
+  PW_TRY_WITH_SIZE(writer.Write(&header_, sizeof(header_)));
 
   // Write only the key and value from the original entry.
   FlashPartition::Input input(partition(), address() + sizeof(EntryHeader));
-  TRY_WITH_SIZE(writer.Write(input, key_length() + value_size()));
+  PW_TRY_WITH_SIZE(writer.Write(input, key_length() + value_size()));
   return writer.Flush();
 }
 
-StatusWithSize Entry::ReadValue(span<byte> buffer, size_t offset_bytes) const {
+StatusWithSize Entry::ReadValue(std::span<byte> buffer,
+                                size_t offset_bytes) const {
   if (offset_bytes > value_size()) {
-    return StatusWithSize::OUT_OF_RANGE;
+    return StatusWithSize::OutOfRange();
   }
 
   const size_t remaining_bytes = value_size() - offset_bytes;
@@ -143,17 +153,17 @@ StatusWithSize Entry::ReadValue(span<byte> buffer, size_t offset_bytes) const {
   StatusWithSize result = partition().Read(
       address_ + sizeof(EntryHeader) + key_length() + offset_bytes,
       buffer.subspan(0, read_size));
-  TRY_WITH_SIZE(result);
+  PW_TRY_WITH_SIZE(result);
 
   if (read_size != remaining_bytes) {
-    return StatusWithSize(Status::RESOURCE_EXHAUSTED, read_size);
+    return StatusWithSize::ResourceExhausted(read_size);
   }
   return StatusWithSize(read_size);
 }
 
-Status Entry::ValueMatches(span<const std::byte> value) const {
+Status Entry::ValueMatches(std::span<const std::byte> value) const {
   if (value_size() != value.size_bytes()) {
-    return Status::NOT_FOUND;
+    return Status::NotFound();
   }
 
   Address address = address_ + sizeof(EntryHeader) + key_length();
@@ -163,22 +173,22 @@ Status Entry::ValueMatches(span<const std::byte> value) const {
   std::array<std::byte, 2 * kMinAlignmentBytes> buffer;
   while (address < end) {
     const size_t read_size = std::min(size_t(end - address), buffer.size());
-    TRY(partition_->Read(address, span(buffer).first(read_size)));
+    PW_TRY(partition_->Read(address, std::span(buffer).first(read_size)));
 
     if (std::memcmp(buffer.data(), value_ptr, read_size) != 0) {
-      return Status::NOT_FOUND;
+      return Status::NotFound();
     }
 
     address += read_size;
     value_ptr += read_size;
   }
 
-  return Status::OK;
+  return OkStatus();
 }
 
-Status Entry::VerifyChecksum(string_view key, span<const byte> value) const {
+Status Entry::VerifyChecksum(Key key, std::span<const byte> value) const {
   if (checksum_algo_ == nullptr) {
-    return header_.checksum == 0 ? Status::OK : Status::DATA_LOSS;
+    return header_.checksum == 0 ? OkStatus() : Status::DataLoss();
   }
   CalculateChecksum(key, value);
   return checksum_algo_->Verify(checksum_bytes());
@@ -198,17 +208,17 @@ Status Entry::VerifyChecksumInFlash() const {
   Address read_address = address_;
 
   // Read the first chunk, which includes the header, and compare the checksum.
-  TRY(partition().Read(read_address, read_size, buffer));
+  PW_TRY(partition().Read(read_address, read_size, buffer));
 
   if (header_to_verify.checksum != header_.checksum) {
     PW_LOG_ERROR("Expected checksum 0x%08" PRIx32 ", found 0x%08" PRIx32,
                  header_.checksum,
                  header_to_verify.checksum);
-    return Status::DATA_LOSS;
+    return Status::DataLoss();
   }
 
   if (checksum_algo_ == nullptr) {
-    return header_.checksum == 0 ? Status::OK : Status::DATA_LOSS;
+    return header_.checksum == 0 ? OkStatus() : Status::DataLoss();
   }
 
   // The checksum is calculated as if the header's checksum field were 0.
@@ -228,7 +238,7 @@ Status Entry::VerifyChecksumInFlash() const {
     // Read the next chunk into the buffer.
     read_address += read_size;
     read_size = std::min(sizeof(buffer), bytes_to_read);
-    TRY(partition().Read(read_address, read_size, buffer));
+    PW_TRY(partition().Read(read_address, read_size, buffer));
   }
 
   checksum_algo_->Finish();
@@ -247,8 +257,8 @@ void Entry::DebugLog() const {
   PW_LOG_DEBUG("   Alignment    = 0x%x", unsigned(alignment_bytes()));
 }
 
-span<const byte> Entry::CalculateChecksum(const string_view key,
-                                          span<const byte> value) const {
+std::span<const byte> Entry::CalculateChecksum(
+    const Key key, std::span<const byte> value) const {
   checksum_algo_->Reset();
 
   {
@@ -256,7 +266,7 @@ span<const byte> Entry::CalculateChecksum(const string_view key,
     header_for_checksum.checksum = 0;
 
     checksum_algo_->Update(&header_for_checksum, sizeof(header_for_checksum));
-    checksum_algo_->Update(as_bytes(span(key)));
+    checksum_algo_->Update(std::as_bytes(std::span(key)));
     checksum_algo_->Update(value);
   }
 
@@ -269,7 +279,7 @@ Status Entry::CalculateChecksumFromFlash() {
   header_.checksum = 0;
 
   if (checksum_algo_ == nullptr) {
-    return Status::OK;
+    return OkStatus();
   }
 
   checksum_algo_->Reset();
@@ -283,7 +293,7 @@ Status Entry::CalculateChecksumFromFlash() {
   std::array<std::byte, 2 * kMinAlignmentBytes> buffer;
   while (address < end) {
     const size_t read_size = std::min(size_t(end - address), buffer.size());
-    TRY(partition_->Read(address, span(buffer).first(read_size)));
+    PW_TRY(partition_->Read(address, std::span(buffer).first(read_size)));
 
     checksum_algo_->Update(buffer.data(), read_size);
     address += read_size;
@@ -291,11 +301,11 @@ Status Entry::CalculateChecksumFromFlash() {
 
   AddPaddingBytesToChecksum();
 
-  span checksum = checksum_algo_->Finish();
+  std::span checksum = checksum_algo_->Finish();
   std::memcpy(&header_.checksum,
               checksum.data(),
               std::min(checksum.size(), sizeof(header_.checksum)));
-  return Status::OK;
+  return OkStatus();
 }
 
 void Entry::AddPaddingBytesToChecksum() const {

@@ -15,42 +15,94 @@
 
 #include <array>
 #include <cstddef>
+#include <span>
 
-#include "pw_span/span.h"
+#include "pw_bytes/span.h"
+#include "pw_result/result.h"
+#include "pw_stream/seek.h"
 #include "pw_stream/stream.h"
 
 namespace pw::stream {
 
-class MemoryWriter : public Writer {
+class MemoryWriter : public SeekableWriter {
  public:
-  MemoryWriter(span<std::byte> dest) : dest_(dest) {}
+  constexpr MemoryWriter(ByteSpan dest) : dest_(dest) {}
 
-  size_t bytes_written() const { return bytes_written_; }
-
-  span<const std::byte> WrittenData() const {
-    return dest_.first(bytes_written_);
+  // Construct writer with prepopulated data in the buffer. The number of
+  // pre-written bytes is provided as `bytes_written`.
+  //
+  // Precondition: The number of pre-written bytes must not be greater than the
+  // size of the provided buffer.
+  constexpr MemoryWriter(ByteSpan dest, size_t bytes_written)
+      : dest_(dest), position_(bytes_written) {
+    PW_ASSERT(position_ <= dest.size_bytes());
   }
 
+  size_t bytes_written() const { return position_; }
+
+  ConstByteSpan WrittenData() const { return dest_.first(position_); }
+
+  std::byte* data() { return dest_.data(); }
   const std::byte* data() const { return dest_.data(); }
 
  private:
+  size_t ConservativeLimit(LimitType type) const override {
+    return type == LimitType::kWrite ? dest_.size_bytes() - position_ : 0;
+  }
+
   // Implementation for writing data to this stream.
   //
   // If the in-memory buffer is exhausted in the middle of a write, this will
-  // perform a partial write and Status::RESOURCE_EXHAUSTED will be returned.
-  Status DoWrite(span<const std::byte> data) override;
+  // perform a partial write and Status::ResourceExhausted() will be returned.
+  Status DoWrite(ConstByteSpan data) final;
 
-  span<std::byte> dest_;
-  size_t bytes_written_ = 0;
+  Status DoSeek(ssize_t offset, Whence origin) final {
+    return CalculateSeek(offset, origin, dest_.size(), position_);
+  }
+
+  size_t DoTell() const final { return position_; }
+
+  ByteSpan dest_;
+  size_t position_ = 0;
 };
 
-template <size_t size_bytes>
-class MemoryWriterBuffer : public MemoryWriter {
+template <size_t kSizeBytes>
+class MemoryWriterBuffer final : public MemoryWriter {
  public:
-  MemoryWriterBuffer() : MemoryWriter(buffer_) {}
+  constexpr MemoryWriterBuffer() : MemoryWriter(buffer_) {}
 
  private:
-  std::array<std::byte, size_bytes> buffer_;
+  std::array<std::byte, kSizeBytes> buffer_;
+};
+
+class MemoryReader final : public SeekableReader {
+ public:
+  constexpr MemoryReader(ConstByteSpan source)
+      : source_(source), position_(0) {}
+
+  size_t bytes_read() const { return position_; }
+
+  const std::byte* data() const { return source_.data(); }
+
+ private:
+  size_t ConservativeLimit(LimitType type) const override {
+    return type == LimitType::kRead ? source_.size_bytes() - position_ : 0;
+  }
+
+  Status DoSeek(ssize_t offset, Whence origin) override {
+    return CalculateSeek(offset, origin, source_.size(), position_);
+  }
+
+  size_t DoTell() const override { return position_; }
+
+  // Implementation for reading data from this stream.
+  //
+  // If the in-memory buffer does not have enough remaining bytes for what was
+  // requested, this will perform a partial read and OK will still be returned.
+  StatusWithSize DoRead(ByteSpan dest) override;
+
+  ConstByteSpan source_;
+  size_t position_;
 };
 
 }  // namespace pw::stream

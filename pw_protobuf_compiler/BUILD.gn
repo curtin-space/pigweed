@@ -12,38 +12,49 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
-# gn-format disable
 import("//build_overrides/pigweed.gni")
 
-import("$dir_pw_build/input_group.gni")
+import("$dir_pw_build/python.gni")
 import("$dir_pw_docgen/docs.gni")
 import("$dir_pw_protobuf_compiler/proto.gni")
+import("$dir_pw_third_party/nanopb/nanopb.gni")
 import("$dir_pw_unit_test/test.gni")
+
 pw_doc_group("docs") {
   sources = [ "docs.rst" ]
 }
 
-_compiling_for_nanopb = pw_protobuf_GENERATORS + [ "nanopb" ] - [ "nanopb" ] !=
-                        pw_protobuf_GENERATORS
-
 pw_test_group("tests") {
-  tests = []
-  if (_compiling_for_nanopb) {
-    tests += [ ":nanopb_test" ]
+  tests = [ ":nanopb_test" ]
+}
+
+pw_test("nanopb_test") {
+  deps = [ ":nanopb_test_protos.nanopb" ]
+  sources = [ "nanopb_test.cc" ]
+  enable_if = dir_pw_third_party_nanopb != ""
+}
+
+pw_proto_library("nanopb_test_protos") {
+  sources = [ "pw_protobuf_compiler_nanopb_protos/nanopb_test.proto" ]
+
+  if (dir_pw_third_party_nanopb != "") {
+    deps = [ "$dir_pw_third_party/nanopb:proto" ]
   }
 }
 
-if (_compiling_for_nanopb) {
-  pw_test("nanopb_test") {
-    deps = [ ":nanopb_test_protos_nanopb" ]
-    sources = [ "nanopb_test.cc" ]
-  }
+pw_proto_library("test_protos") {
+  sources = [
+    "pw_protobuf_compiler_protos/nested/more_nesting/test.proto",
+    "pw_protobuf_compiler_protos/test.proto",
+  ]
+}
 
-  pw_proto_library("nanopb_test_protos") {
-    sources = [ "pw_protobuf_compiler_protos/nanopb_test.proto" ]
-  }
-} else {
-  pw_input_group("not_needed") {
-    inputs = [ "nanopb_test.cc" ]
-  }
+# PyPI Requirements needed to install Python protobuf packages.
+pw_python_requirements("protobuf_requirements") {
+  requirements = [
+    # NOTE: mypy needs to stay in sync with mypy-protobuf
+    # Currently using mypy 0.910 and mypy-protobuf 2.9
+    # This must also be specified in //pw_protobuf_compiler/py/setup.cfg
+    "mypy-protobuf==2.9",
+  ]
 }

@@ -26,7 +26,7 @@ constexpr char kChar63 = '/';  // URL safe encoding uses _ instead
 constexpr char kPadding = '=';
 
 // Table that encodes a 6-bit pattern as a Base64 character
-constexpr char encode_bits[64] = {
+constexpr char kEncodeTable[64] = {
     'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K',     'L',    'M',
     'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X',     'Y',    'Z',
     'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k',     'l',    'm',
@@ -34,16 +34,18 @@ constexpr char encode_bits[64] = {
     '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', kChar62, kChar63};
 
 constexpr char BitGroup0Char(uint8_t byte0) {
-  return encode_bits[(byte0 & 0b11111100) >> 2];
+  return kEncodeTable[(byte0 & 0b11111100) >> 2];
 }
 constexpr char BitGroup1Char(uint8_t byte0, uint8_t byte1 = 0) {
-  return encode_bits[((byte0 & 0b00000011) << 4) | ((byte1 & 0b11110000) >> 4)];
+  return kEncodeTable[((byte0 & 0b00000011) << 4) |
+                      ((byte1 & 0b11110000) >> 4)];
 }
 constexpr char BitGroup2Char(uint8_t byte1, uint8_t byte2 = 0) {
-  return encode_bits[((byte1 & 0b00001111) << 2) | ((byte2 & 0b11000000) >> 6)];
+  return kEncodeTable[((byte1 & 0b00001111) << 2) |
+                      ((byte2 & 0b11000000) >> 6)];
 }
 constexpr char BitGroup3Char(uint8_t byte2) {
-  return encode_bits[byte2 & 0b00111111];
+  return kEncodeTable[byte2 & 0b00111111];
 }
 
 // Decoding functions
@@ -54,7 +56,7 @@ constexpr uint8_t kX = 0xff;  // Value used for invalid characters
 // Table that decodes a Base64 character to its 6-bit value. Supports the
 // standard (+/) and URL-safe (-_) alphabets. Starts from the lowest-value valid
 // character, which is +.
-constexpr uint8_t decode_char[] = {
+constexpr uint8_t kDecodeTable[] = {
     62, kX, 62, kX, 63, 52, 53, 54, 55, 56,  //  0 - 09
     57, 58, 59, 60, 61, kX, kX, kX, 0,  kX,  // 10 - 19
     kX, kX, 0,  1,  2,  3,  4,  5,  6,  7,   // 20 - 29
@@ -66,7 +68,7 @@ constexpr uint8_t decode_char[] = {
 };
 
 constexpr uint8_t CharToBits(char ch) {
-  return decode_char[ch - kMinValidChar];
+  return kDecodeTable[ch - kMinValidChar];
 }
 
 constexpr uint8_t Byte0(uint8_t bits0, uint8_t bits1) {
@@ -154,7 +156,8 @@ extern "C" bool pw_Base64IsValid(const char* base64_data, size_t base64_size) {
   return true;
 }
 
-size_t Encode(span<const std::byte> binary, span<char> output_buffer) {
+size_t Encode(std::span<const std::byte> binary,
+              std::span<char> output_buffer) {
   const size_t required_size = EncodedSize(binary.size_bytes());
   if (output_buffer.size_bytes() < required_size) {
     return 0;
@@ -163,7 +166,7 @@ size_t Encode(span<const std::byte> binary, span<char> output_buffer) {
   return required_size;
 }
 
-size_t Decode(std::string_view base64, span<std::byte> output_buffer) {
+size_t Decode(std::string_view base64, std::span<std::byte> output_buffer) {
   if (output_buffer.size_bytes() < MaxDecodedSize(base64.size()) ||
       !IsValid(base64)) {
     return 0;

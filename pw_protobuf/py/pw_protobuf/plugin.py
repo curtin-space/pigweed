@@ -20,9 +20,9 @@ protobuf messages in the pw_protobuf format.
 
 import sys
 
-import google.protobuf.compiler.plugin_pb2 as plugin_pb2
+from google.protobuf.compiler import plugin_pb2
 
-import codegen_pwpb as codegen_pwpb
+from pw_protobuf import codegen_pwpb
 
 
 def process_proto_request(
@@ -55,6 +55,11 @@ def main() -> int:
     request = plugin_pb2.CodeGeneratorRequest.FromString(data)
     response = plugin_pb2.CodeGeneratorResponse()
     process_proto_request(request, response)
+
+    # Declare that this plugin supports optional fields in proto3.
+    response.supported_features |= (  # type: ignore[attr-defined]
+        response.FEATURE_PROTO3_OPTIONAL)  # type: ignore[attr-defined]
+
     sys.stdout.buffer.write(response.SerializeToString())
     return 0
 

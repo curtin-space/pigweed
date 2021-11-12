@@ -12,13 +12,20 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
-# gn-format disable
 import("//build_overrides/pigweed.gni")
 
-import("$dir_pw_protobuf_compiler/nanopb.gni")
+import("$dir_pw_chrono/backend.gni")
 import("$dir_pw_protobuf_compiler/proto.gni")
+import("$dir_pw_rpc/system_server/backend.gni")
+import("$dir_pw_sync/backend.gni")
+import("$dir_pw_sys_io/backend.gni")
+import("$dir_pw_third_party/nanopb/nanopb.gni")
+import("$dir_pw_thread/backend.gni")
 import("$dir_pw_toolchain/host_clang/toolchains.gni")
 import("$dir_pw_toolchain/host_gcc/toolchains.gni")
+import("$dir_pw_trace/backend.gni")
+import("$dir_pw_trace_tokenized/config.gni")
+
 _host_common = {
   # Use logging-based test output on host.
   pw_unit_test_MAIN = "$dir_pw_unit_test:logging_main"
@@ -29,17 +36,50 @@ _host_common = {
   # Configure backend for logging facade.
   pw_log_BACKEND = "$dir_pw_log_basic"
 
+  # Configure backends for pw_sync's facades.
+  pw_sync_INTERRUPT_SPIN_LOCK_BACKEND = "$dir_pw_sync_stl:interrupt_spin_lock"
+  pw_sync_BINARY_SEMAPHORE_BACKEND = "$dir_pw_sync_stl:binary_semaphore_backend"
+  pw_sync_COUNTING_SEMAPHORE_BACKEND =
+      "$dir_pw_sync_stl:counting_semaphore_backend"
+  pw_sync_MUTEX_BACKEND = "$dir_pw_sync_stl:mutex_backend"
+  pw_sync_TIMED_MUTEX_BACKEND = "$dir_pw_sync_stl:timed_mutex_backend"
+  pw_sync_THREAD_NOTIFICATION_BACKEND =
+      "$dir_pw_sync:binary_semaphore_thread_notification_backend"
+  pw_sync_TIMED_THREAD_NOTIFICATION_BACKEND =
+      "$dir_pw_sync:binary_semaphore_timed_thread_notification_backend"
+
   # Configure backend for pw_sys_io facade.
   pw_sys_io_BACKEND = "$dir_pw_sys_io_stdio"
 
-  # Allow nanopb to be toggled via a build arg on host for easy testing.
-  _has_nanopb = pw_protobuf_GENERATORS + [ "nanopb" ] - [ "nanopb" ] !=
-                pw_protobuf_GENERATORS
-  if (dir_pw_third_party_nanopb != "" && !_has_nanopb) {
-    pw_protobuf_GENERATORS += [ "nanopb" ]
-  }
+  # Configure backend for pw_rpc_system_server.
+  pw_rpc_system_server_BACKEND = "$dir_pigweed/targets/host:system_rpc_server"
+  pw_rpc_CONFIG = "$dir_pw_rpc:use_global_mutex"
 
-  pw_IS_HOST_TOOLCHAIN = true
+  # Configure backend for trace facade.
+  pw_trace_BACKEND = "$dir_pw_trace_tokenized"
+
+  # Tokenizer trace time.
+  pw_trace_tokenizer_time = "$dir_pw_trace_tokenized:host_trace_time"
+
+  # Configure backend for pw_chrono's facades.
+  pw_chrono_SYSTEM_CLOCK_BACKEND = "$dir_pw_chrono_stl:system_clock"
+  pw_chrono_SYSTEM_TIMER_BACKEND = "$dir_pw_chrono_stl:system_timer"
+
+  # Configure backends for pw_thread's facades.
+  pw_thread_ID_BACKEND = "$dir_pw_thread_stl:id"
+  pw_thread_YIELD_BACKEND = "$dir_pw_thread_stl:yield"
+  pw_thread_SLEEP_BACKEND = "$dir_pw_thread_stl:sleep"
+  pw_thread_THREAD_BACKEND = "$dir_pw_thread_stl:thread"
+
+  pw_build_LINK_DEPS = []  # Explicit list overwrite required by GN
+  pw_build_LINK_DEPS = [
+    "$dir_pw_assert:impl",
+    "$dir_pw_log:impl",
+  ]
+
+  # Specify builtin GN variables.
+  current_os = host_os
+  current_cpu = host_cpu
 }
 
 # Linux-specific target configuration.
@@ -72,6 +112,15 @@ _os_specific_config = {
   }
 }
 
+_clang_default_configs = [
+  "$dir_pw_build:extra_strict_warnings",
+  "$dir_pw_build:clang_thread_safety_warnings",
+]
+_gcc_default_configs = [
+  "$dir_pw_build:extra_strict_warnings",
+  "$dir_pw_toolchain/host_gcc:threading_support",
+]
+
 pw_target_toolchain_host = {
   _excluded_members = [
     "defaults",
@@ -86,6 +135,7 @@ pw_target_toolchain_host = {
       forward_variables_from(_toolchain_base.defaults, "*")
       forward_variables_from(_host_common, "*")
       forward_variables_from(_os_specific_config, "*")
+      default_configs += _clang_default_configs
     }
   }
 
@@ -97,6 +147,7 @@ pw_target_toolchain_host = {
       forward_variables_from(_toolchain_base.defaults, "*")
       forward_variables_from(_host_common, "*")
       forward_variables_from(_os_specific_config, "*")
+      default_configs += _clang_default_configs
     }
   }
 
@@ -108,6 +159,79 @@ pw_target_toolchain_host = {
       forward_variables_from(_toolchain_base.defaults, "*")
       forward_variables_from(_host_common, "*")
       forward_variables_from(_os_specific_config, "*")
+      default_configs += _clang_default_configs
+    }
+  }
+
+  clang_fuzz = {
+    name = "host_clang_fuzz"
+    _toolchain_base = pw_toolchain_host_clang.fuzz
+    forward_variables_from(_toolchain_base, "*", _excluded_members)
+    defaults = {
+      forward_variables_from(_toolchain_base.defaults, "*")
+      forward_variables_from(_host_common, "*")
+      forward_variables_from(_os_specific_config, "*")
+      default_configs += _clang_default_configs
+    }
+  }
+
+  clang_asan = {
+    name = "host_clang_asan"
+    _toolchain_base = pw_toolchain_host_clang.asan
+    forward_variables_from(_toolchain_base, "*", _excluded_members)
+    defaults = {
+      forward_variables_from(_toolchain_base.defaults, "*")
+      forward_variables_from(_host_common, "*")
+      forward_variables_from(_os_specific_config, "*")
+      default_configs += _clang_default_configs
+    }
+  }
+
+  clang_ubsan = {
+    name = "host_clang_ubsan"
+    _toolchain_base = pw_toolchain_host_clang.ubsan
+    forward_variables_from(_toolchain_base, "*", _excluded_members)
+    defaults = {
+      forward_variables_from(_toolchain_base.defaults, "*")
+      forward_variables_from(_host_common, "*")
+      forward_variables_from(_os_specific_config, "*")
+      default_configs += _clang_default_configs
+    }
+  }
+
+  clang_ubsan_heuristic = {
+    name = "host_clang_ubsan_heuristic"
+    _toolchain_base = pw_toolchain_host_clang.ubsan_heuristic
+    forward_variables_from(_toolchain_base, "*", _excluded_members)
+    defaults = {
+      forward_variables_from(_toolchain_base.defaults, "*")
+      forward_variables_from(_host_common, "*")
+      forward_variables_from(_os_specific_config, "*")
+      default_configs += _clang_default_configs
+    }
+  }
+
+  clang_msan = {
+    name = "host_clang_msan"
+    _toolchain_base = pw_toolchain_host_clang.msan
+    forward_variables_from(_toolchain_base, "*", _excluded_members)
+    defaults = {
+      forward_variables_from(_toolchain_base.defaults, "*")
+      forward_variables_from(_host_common, "*")
+      forward_variables_from(_os_specific_config, "*")
+      default_configs += _clang_default_configs
+    }
+  }
+
+  clang_tsan = {
+    name = "host_clang_tsan"
+    _toolchain_base = pw_toolchain_host_clang.tsan
+    forward_variables_from(_toolchain_base, "*", _excluded_members)
+    defaults = {
+      forward_variables_from(_toolchain_base.defaults, "*")
+      forward_variables_from(_host_common, "*")
+      forward_variables_from(_os_specific_config, "*")
+      default_configs += _clang_default_configs
     }
   }
 
@@ -119,6 +243,7 @@ pw_target_toolchain_host = {
       forward_variables_from(_toolchain_base.defaults, "*")
       forward_variables_from(_host_common, "*")
       forward_variables_from(_os_specific_config, "*")
+      default_configs += _gcc_default_configs
     }
   }
 
@@ -130,6 +255,7 @@ pw_target_toolchain_host = {
       forward_variables_from(_toolchain_base.defaults, "*")
       forward_variables_from(_host_common, "*")
       forward_variables_from(_os_specific_config, "*")
+      default_configs += _gcc_default_configs
     }
   }
 
@@ -141,6 +267,7 @@ pw_target_toolchain_host = {
       forward_variables_from(_toolchain_base.defaults, "*")
       forward_variables_from(_host_common, "*")
       forward_variables_from(_os_specific_config, "*")
+      default_configs += _gcc_default_configs
     }
   }
 }
@@ -152,6 +279,12 @@ pw_target_toolchain_host_list = [
   pw_target_toolchain_host.clang_debug,
   pw_target_toolchain_host.clang_speed_optimized,
   pw_target_toolchain_host.clang_size_optimized,
+  pw_target_toolchain_host.clang_fuzz,
+  pw_target_toolchain_host.clang_asan,
+  pw_target_toolchain_host.clang_ubsan,
+  pw_target_toolchain_host.clang_ubsan_heuristic,
+  pw_target_toolchain_host.clang_msan,
+  pw_target_toolchain_host.clang_tsan,
   pw_target_toolchain_host.gcc_debug,
   pw_target_toolchain_host.gcc_speed_optimized,
   pw_target_toolchain_host.gcc_size_optimized,

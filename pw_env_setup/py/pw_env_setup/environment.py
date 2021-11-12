@@ -17,8 +17,22 @@ import contextlib
 import os
 import re
 
-# goto label written to the end of Windows batch files for exiting a script.
-_SCRIPT_END_LABEL = '_pw_end'
+# The order here is important. On Python 2 we want StringIO.StringIO and not
+# io.StringIO. On Python 3 there is no StringIO module so we want io.StringIO.
+# Not using six because six is not a standard package we can expect to have
+# installed in the system Python.
+try:
+    from StringIO import StringIO  # type: ignore
+except ImportError:
+    from io import StringIO
+
+from . import apply_visitor
+from . import batch_visitor
+from . import json_visitor
+from . import shell_visitor
+
+# Disable super() warnings since this file must be Python 2 compatible.
+# pylint: disable=super-with-arguments
 
 
 class BadNameType(TypeError):
@@ -45,13 +59,27 @@ class UnexpectedAction(ValueError):
     pass
 
 
+class AcceptNotOverridden(TypeError):
+    pass
+
+
 class _Action(object):  # pylint: disable=useless-object-inheritance
-    def unapply(self, env, orig_env):  # pylint: disable=no-self-use
-        del env, orig_env  # Only used in _VariableAction and subclasses.
+    def unapply(self, env, orig_env):
+        pass
+
+    def accept(self, visitor):
+        del visitor
+        raise AcceptNotOverridden('accept() not overridden for {}'.format(
+            self.__class__.__name__))
+
+    def write_deactivate(self,
+                         outs,
+                         windows=(os.name == 'nt'),
+                         replacements=()):
+        pass
 
 
 class _VariableAction(_Action):
-    # pylint: disable=redefined-builtin,too-few-public-methods
     # pylint: disable=keyword-arg-before-vararg
     def __init__(self, name, value, allow_empty_values=False, *args, **kwargs):
         super(_VariableAction, self).__init__(*args, **kwargs)
@@ -64,7 +92,7 @@ class _VariableAction(_Action):
     def _check(self):
         try:
             # In python2, unicode is a distinct type.
-            valid_types = (str, unicode)  # pylint: disable=undefined-variable
+            valid_types = (str, unicode)
         except NameError:
             valid_types = (str, )
 
@@ -96,18 +124,20 @@ class _VariableAction(_Action):
         else:
             env.pop(self.name, None)
 
+    def __repr__(self):
+        return '{}({}, {})'.format(self.__class__.__name__, self.name,
+                                   self.value)
+
 
 class Set(_VariableAction):
     """Set a variable."""
-    def write(self, outs, windows=(os.name == 'nt')):
-        if windows:
-            outs.write('set {name}={value}\n'.format(**vars(self)))
-        else:
-            outs.write(
-                '{name}="{value}"\nexport {name}\n'.format(**vars(self)))
+    def __init__(self, *args, **kwargs):
+        deactivate = kwargs.pop('deactivate', True)
+        super(Set, self).__init__(*args, **kwargs)
+        self.deactivate = deactivate
 
-    def apply(self, env):
-        env[self.name] = self.value
+    def accept(self, visitor):
+        visitor.visit_set(self)
 
 
 class Clear(_VariableAction):
@@ -117,50 +147,14 @@ class Clear(_VariableAction):
         kwargs['allow_empty_values'] = True
         super(Clear, self).__init__(*args, **kwargs)
 
-    def write(self, outs, windows=(os.name == 'nt')):
-        if windows:
-            outs.write('set {name}=\n'.format(**vars(self)))
-        else:
-            outs.write('unset {name}\n'.format(**vars(self)))
-
-    def apply(self, env):
-        if self.name in env:
-            del env[self.name]
+    def accept(self, visitor):
+        visitor.visit_clear(self)
 
 
 class Remove(_VariableAction):
     """Remove a value from a PATH-like variable."""
-    def __init__(self, name, value, pathsep, *args, **kwargs):
-        super(Remove, self).__init__(name, value, *args, **kwargs)
-        self._pathsep = pathsep
-
-    def write(self, outs, windows=(os.name == 'nt')):
-        if windows:
-            outs.write(':: Remove\n::   {value}\n:: from\n::   {name}\n'
-                       ':: before adding it back.\n'
-                       'set {name}=%{name}:{value}{pathsep}=%\n'.format(
-                           name=self.name,
-                           value=self.value,
-                           pathsep=self._pathsep))
-
-        else:
-            outs.write('# Remove \n#   {value}\n# from\n#   {name}\n# before '
-                       'adding it back.\n'
-                       '{name}="$(echo "${name}"'
-                       ' | sed "s/{pathsep}{escvalue}{pathsep}/{pathsep}/g;"'
-                       ' | sed "s/^{escvalue}{pathsep}//g;"'
-                       ' | sed "s/{pathsep}{escvalue}$//g;"'
-                       ')"\nexport {name}\n'.format(
-                           name=self.name,
-                           value=self.value,
-                           escvalue=self.value.replace('/', '\\/'),
-                           pathsep=self._pathsep))
-
-    def apply(self, env):
-        env[self.name] = env[self.name].replace(
-            '{}{}'.format(self.value, self._pathsep), '')
-        env[self.name] = env[self.name].replace(
-            '{}{}'.format(self._pathsep, self.value), '')
+    def accept(self, visitor):
+        visitor.visit_remove(self)
 
 
 class BadVariableValue(ValueError):
@@ -178,21 +172,12 @@ class Prepend(_VariableAction):
         super(Prepend, self).__init__(name, value, *args, **kwargs)
         self._join = join
 
-    def write(self, outs, windows=(os.name == 'nt')):
-        if windows:
-            outs.write('set {name}={value}\n'.format(
-                name=self.name,
-                value=self._join(self.value, '%{}%'.format(self.name))))
-        else:
-            outs.write('{name}="{value}"\nexport {name}\n'.format(
-                name=self.name, value=self._join(self.value, '$' + self.name)))
-
-    def apply(self, env):
-        env[self.name] = self._join(self.value, env.get(self.name, ''))
-
     def _check(self):
         super(Prepend, self)._check()
         _append_prepend_check(self)
+
+    def accept(self, visitor):
+        visitor.visit_prepend(self)
 
 
 class Append(_VariableAction):
@@ -201,21 +186,12 @@ class Append(_VariableAction):
         super(Append, self).__init__(name, value, *args, **kwargs)
         self._join = join
 
-    def write(self, outs, windows=(os.name == 'nt')):
-        if windows:
-            outs.write('set {name}={value}\n'.format(
-                name=self.name,
-                value=self._join('%{}%'.format(self.name), self.value)))
-        else:
-            outs.write('{name}="{value}"\nexport {name}\n'.format(
-                name=self.name, value=self._join('$' + self.name, self.value)))
-
-    def apply(self, env):
-        env[self.name] = self._join(env.get(self.name, ''), self.value)
-
     def _check(self):
         super(Append, self)._check()
         _append_prepend_check(self)
+
+    def accept(self, visitor):
+        visitor.visit_append(self)
 
 
 class BadEchoValue(ValueError):
@@ -230,30 +206,13 @@ class Echo(_Action):
             raise BadEchoValue(value)
         super(Echo, self).__init__(*args, **kwargs)
         self.value = value
-        self._newline = newline
+        self.newline = newline
 
-    def write(self, outs, windows=(os.name == 'nt')):
-        # POSIX shells parse arguments and pass to echo, but Windows seems to
-        # pass the command line as is without parsing, so quoting is wrong.
-        if windows:
-            if self._newline:
-                if not self.value:
-                    outs.write('echo.\n')
-                else:
-                    outs.write('echo {}\n'.format(self.value))
-            else:
-                outs.write('<nul set /p="{}"\n'.format(self.value))
-        else:
-            # TODO(mohrr) use shlex.quote().
-            outs.write('if [ -z "${PW_ENVSETUP_QUIET:-}" ]; then\n')
-            if self._newline:
-                outs.write('  echo "{}"\n'.format(self.value))
-            else:
-                outs.write('  echo -n "{}"\n'.format(self.value))
-            outs.write('fi\n')
+    def accept(self, visitor):
+        visitor.visit_echo(self)
 
-    def apply(self, env):  # pylint: disable=no-self-use
-        del env  # Unused.
+    def __repr__(self):
+        return 'Echo({}, newline={})'.format(self.value, self.newline)
 
 
 class Comment(_Action):
@@ -262,13 +221,11 @@ class Comment(_Action):
         super(Comment, self).__init__(*args, **kwargs)
         self.value = value
 
-    def write(self, outs, windows=(os.name == 'nt')):
-        comment_char = '::' if windows else '#'
-        for line in self.value.splitlines():
-            outs.write('{} {}\n'.format(comment_char, line))
+    def accept(self, visitor):
+        visitor.visit_comment(self)
 
-    def apply(self, env):  # pylint: disable=no-self-use
-        del env  # Unused.
+    def __repr__(self):
+        return 'Comment({})'.format(self.value)
 
 
 class Command(_Action):
@@ -280,47 +237,61 @@ class Command(_Action):
         self.command = command
         self.exit_on_error = exit_on_error
 
-    def write(self, outs, windows=(os.name == 'nt')):
-        # TODO(mohrr) use shlex.quote here?
-        outs.write('{}\n'.format(' '.join(self.command)))
-        if not self.exit_on_error:
-            return
+    def accept(self, visitor):
+        visitor.visit_command(self)
 
-        if windows:
-            outs.write(
-                'if %ERRORLEVEL% neq 0 goto {}\n'.format(_SCRIPT_END_LABEL))
-        else:
-            # Assume failing command produced relevant output.
-            outs.write('if [ "$?" -ne 0 ]; then\n  return 1\nfi\n')
+    def __repr__(self):
+        return 'Command({})'.format(self.command)
+
+
+class Doctor(Command):
+    def __init__(self, *args, **kwargs):
+        log_level = 'warn' if 'PW_ENVSETUP_QUIET' in os.environ else 'info'
+        super(Doctor, self).__init__(
+            command=['pw', '--no-banner', '--loglevel', log_level, 'doctor'],
+            *args,
+            **kwargs)
+
+    def accept(self, visitor):
+        visitor.visit_doctor(self)
+
+    def __repr__(self):
+        return 'Doctor()'
 
 
 class BlankLine(_Action):
     """Write a blank line to the init script."""
-    def write(  # pylint: disable=no-self-use
-        self, outs, windows=(os.name == 'nt')):
-        del windows  # Unused.
-        outs.write('\n')
+    def accept(self, visitor):
+        visitor.visit_blank_line(self)
 
-    def apply(self, env):  # pylint: disable=no-self-use
-        del env  # Unused.
+    def __repr__(self):
+        return 'BlankLine()'
+
+
+class Function(_Action):
+    def __init__(self, name, body, *args, **kwargs):
+        super(Function, self).__init__(*args, **kwargs)
+        self.name = name
+        self.body = body
+
+    def accept(self, visitor):
+        visitor.visit_function(self)
+
+    def __repr__(self):
+        return 'Function({}, {})'.format(self.name, self.body)
 
 
 class Hash(_Action):
-    def write(self, outs, windows=(os.name == 'nt')):  # pylint: disable=no-self-use
-        if windows:
-            return
+    def accept(self, visitor):
+        visitor.visit_hash(self)
 
-        outs.write('''
-# This should detect bash and zsh, which have a hash command that must be
-# called to get it to forget past commands. Without forgetting past
-# commands the $PATH changes we made may not be respected.
-if [ -n "${BASH:-}" -o -n "${ZSH_VERSION:-}" ] ; then
-  hash -r\n
-fi
-''')
+    def __repr__(self):
+        return 'Hash()'
 
-    def apply(self, env):  # pylint: disable=no-self-use
-        del env  # Unused.
+
+class Join(object):  # pylint: disable=useless-object-inheritance
+    def __init__(self, pathsep=os.pathsep):
+        self.pathsep = pathsep
 
 
 # TODO(mohrr) remove disable=useless-object-inheritance once in Python 3.
@@ -340,11 +311,12 @@ class Environment(object):
         self._pathsep = pathsep
         self._windows = windows
         self._allcaps = allcaps
+        self.replacements = []
+        self._join = Join(pathsep)
+        self._finalized = False
 
-    def _join(self, *args):
-        if len(args) == 1 and isinstance(args[0], (list, tuple)):
-            args = args[0]
-        return self._pathsep.join(args)
+    def add_replacement(self, variable, value=None):
+        self.replacements.append((variable, value))
 
     def normalize_key(self, name):
         if self._allcaps:
@@ -359,33 +331,36 @@ class Environment(object):
     # A newline is printed after each high-level operation. Top-level
     # operations should not invoke each other (this is why _remove() exists).
 
-    def set(self, name, value):
+    def set(self, name, value, deactivate=True):
         """Set a variable."""
+        assert not self._finalized
         name = self.normalize_key(name)
-        self._actions.append(Set(name, value))
+        self._actions.append(Set(name, value, deactivate=deactivate))
         self._blankline()
 
     def clear(self, name):
         """Remove a variable."""
+        assert not self._finalized
         name = self.normalize_key(name)
         self._actions.append(Clear(name))
         self._blankline()
 
     def _remove(self, name, value):
         """Remove a value from a variable."""
-
+        assert not self._finalized
         name = self.normalize_key(name)
         if self.get(name, None):
             self._actions.append(Remove(name, value, self._pathsep))
 
     def remove(self, name, value):
         """Remove a value from a PATH-like variable."""
+        assert not self._finalized
         self._remove(name, value)
         self._blankline()
 
     def append(self, name, value):
         """Add a value to a PATH-like variable. Rarely used, see prepend()."""
-
+        assert not self._finalized
         name = self.normalize_key(name)
         if self.get(name, None):
             self._remove(name, value)
@@ -396,7 +371,7 @@ class Environment(object):
 
     def prepend(self, name, value):
         """Add a value to the beginning of a PATH-like variable."""
-
+        assert not self._finalized
         name = self.normalize_key(name)
         if self.get(name, None):
             self._remove(name, value)
@@ -407,40 +382,68 @@ class Environment(object):
 
     def echo(self, value='', newline=True):
         """Echo a value to the terminal."""
-
+        # echo() deliberately ignores self._finalized.
         self._actions.append(Echo(value, newline))
         if value:
             self._blankline()
 
     def comment(self, comment):
         """Add a comment to the init script."""
+        # comment() deliberately ignores self._finalized.
         self._actions.append(Comment(comment))
         self._blankline()
 
     def command(self, command, exit_on_error=True):
         """Run a command."""
-
+        # command() deliberately ignores self._finalized.
         self._actions.append(Command(command, exit_on_error=exit_on_error))
+        self._blankline()
+
+    def doctor(self):
+        """Run 'pw doctor'."""
+        self._actions.append(Doctor())
+
+    def function(self, name, body):
+        """Define a function."""
+        assert not self._finalized
+        self._actions.append(Command(name, body))
         self._blankline()
 
     def _blankline(self):
         self._actions.append(BlankLine())
 
-    def hash(self):
-        """If required by the shell rehash the PATH variable."""
+    def finalize(self):
+        """Run cleanup at the end of environment setup."""
+        assert not self._finalized
+        self._finalized = True
         self._actions.append(Hash())
         self._blankline()
 
-    def write(self, outs):
-        """Writes a shell init script to outs."""
-        if self._windows:
-            outs.write('@echo off\n')
+        if not self._windows:
+            buf = StringIO()
+            self.write_deactivate(buf)
+            self._actions.append(Function('_pw_deactivate', buf.getvalue()))
+            self._blankline()
 
+    def accept(self, visitor):
         for action in self._actions:
-            action.write(outs, windows=self._windows)
+            action.accept(visitor)
 
+    def json(self, outs):
+        json_visitor.JSONVisitor().serialize(self, outs)
+
+    def write(self, outs):
         if self._windows:
-            outs.write(':{}\n'.format(_SCRIPT_END_LABEL))
+            visitor = batch_visitor.BatchVisitor(pathsep=self._pathsep)
+        else:
+            visitor = shell_visitor.ShellVisitor(pathsep=self._pathsep)
+        visitor.serialize(self, outs)
+
+    def write_deactivate(self, outs):
+        if self._windows:
+            return
+        visitor = shell_visitor.DeactivateShellVisitor(pathsep=self._pathsep)
+        visitor.serialize(self, outs)
 
     @contextlib.contextmanager
     def __call__(self, export=True):
@@ -466,15 +469,20 @@ class Environment(object):
             else:
                 env = os.environ.copy()
 
-            for action in self._actions:
-                action.apply(env)
+            apply = apply_visitor.ApplyVisitor(pathsep=self._pathsep)
+            apply.apply(self, env)
 
             yield env
 
         finally:
             if export:
-                for action in self._actions:
-                    action.unapply(env=os.environ, orig_env=orig_env)
+                for key in set(os.environ):
+                    try:
+                        os.environ[key] = orig_env[key]
+                    except KeyError:
+                        del os.environ[key]
+                for key in set(orig_env) - set(os.environ):
+                    os.environ[key] = orig_env[key]
 
     def get(self, key, default=None):
         """Get the value of a variable within context of this object."""

@@ -14,14 +14,14 @@
 #pragma once
 
 #include <array>
+#include <span>
 
 #include "pw_containers/vector.h"
-#include "pw_span/span.h"
 #include "pw_status/status.h"
 
 namespace pw::allocator {
 
-template <size_t num_buckets>
+template <size_t kNumBuckets>
 class FreeListBuffer;
 
 // Basic freelist implementation for an allocator.
@@ -43,7 +43,7 @@ class FreeListBuffer;
 // bucket[1] (128B) --> chunk[65B] --> chunk[72B] --> NULL
 // bucket[2] (256B) --> NULL
 // bucket[3] (512B) --> chunk[312B] --> chunk[512B] --> chunk[416B] --> NULL
-// bucket[4] (implciit) --> chunk[1024B] --> chunk[513B] --> NULL
+// bucket[4] (implicit) --> chunk[1024B] --> chunk[513B] --> NULL
 //
 // Note that added chunks should be aligned to a 4-byte boundary.
 //
@@ -64,19 +64,19 @@ class FreeList {
   //   OK: The chunk was added successfully
   //   OUT_OF_RANGE: The chunk could not be added for size reasons (e.g. if
   //                 the chunk is too small to store the FreeListNode).
-  Status AddChunk(span<std::byte> chunk);
+  Status AddChunk(std::span<std::byte> chunk);
 
   // Finds an eligible chunk for an allocation of size `size`. Note that this
   // will return the first allocation possible within a given bucket, it does
-  // not currently optimize for finding the smallest chunk. Returns a pw::span
+  // not currently optimize for finding the smallest chunk. Returns a std::span
   // representing the chunk. This will be "valid" on success, and will have size
   // = 0 on failure (if there were no chunks available for that allocation).
-  span<std::byte> FindChunk(size_t size) const;
+  std::span<std::byte> FindChunk(size_t size) const;
 
   // Remove a chunk from this freelist. Returns:
   //   OK: The chunk was removed successfully
   //   NOT_FOUND: The chunk could not be found in this freelist.
-  Status RemoveChunk(span<std::byte> chunk);
+  Status RemoveChunk(std::span<std::byte> chunk);
 
  private:
   // For a given size, find which index into chunks_ the node should be written
@@ -84,7 +84,7 @@ class FreeList {
   size_t FindChunkPtrForSize(size_t size, bool non_null) const;
 
  private:
-  template <size_t num_buckets>
+  template <size_t kNumBuckets>
   friend class FreeListBuffer;
 
   struct FreeListNode {
@@ -101,21 +101,21 @@ class FreeList {
 };
 
 // Holder for FreeList's storage.
-template <size_t num_buckets>
+template <size_t kNumBuckets>
 class FreeListBuffer : public FreeList {
  public:
   // These constructors are a little hacky because of the initialization order.
   // Because FreeList has a trivial constructor, this is safe, however.
   explicit FreeListBuffer(std::initializer_list<size_t> sizes)
-      : FreeList(chunks_, sizes_), sizes_(sizes), chunks_(num_buckets + 1, 0) {}
-  explicit FreeListBuffer(std::array<size_t, num_buckets> sizes)
+      : FreeList(chunks_, sizes_), sizes_(sizes), chunks_(kNumBuckets + 1, 0) {}
+  explicit FreeListBuffer(std::array<size_t, kNumBuckets> sizes)
       : FreeList(chunks_, sizes_),
         sizes_(sizes.begin(), sizes.end()),
-        chunks_(num_buckets + 1, 0) {}
+        chunks_(kNumBuckets + 1, 0) {}
 
  private:
-  Vector<size_t, num_buckets> sizes_;
-  Vector<FreeList::FreeListNode*, num_buckets + 1> chunks_;
+  Vector<size_t, kNumBuckets> sizes_;
+  Vector<FreeList::FreeListNode*, kNumBuckets + 1> chunks_;
 };
 
 }  // namespace pw::allocator

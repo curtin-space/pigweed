@@ -16,11 +16,26 @@ syntax = "proto3";
 package pw.rpc.test;
 
 message TestRequest {
-  float integer = 1;
+  int64 integer = 1;
+  uint32 status_code = 2;
 }
 
 message TestResponse {
   int32 value = 1;
 }
 
+message TestStreamResponse {
+  bytes chunk = 1;
+  uint32 number = 2;
+}
+
 message Empty {}
+
+service TestService {
+  rpc TestUnaryRpc(TestRequest) returns (TestResponse);
+  rpc TestAnotherUnaryRpc(TestRequest) returns (TestResponse);
+  rpc TestServerStreamRpc(TestRequest) returns (stream TestStreamResponse);
+  rpc TestClientStreamRpc(stream TestRequest) returns (TestStreamResponse);
+  rpc TestBidirectionalStreamRpc(stream TestRequest)
+      returns (stream TestStreamResponse);
+}

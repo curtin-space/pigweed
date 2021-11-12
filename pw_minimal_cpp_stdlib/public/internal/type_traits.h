@@ -13,10 +13,13 @@
 // the License.
 #pragma once
 
-namespace std {
+#include "pw_polyfill/standard_library/namespace.h"
+
+_PW_POLYFILL_BEGIN_NAMESPACE_STD
 
 #define __cpp_lib_transformation_trait_aliases 201304L
 #define __cpp_lib_type_trait_variable_templates 201510L
+#define __cpp_lib_logical_traits 201510L
 
 template <decltype(sizeof(0)) kLength,
           decltype(sizeof(0)) kAlignment>  // no default
@@ -447,4 +450,4 @@ using underlying_type_t = typename underlying_type<T>::type;
 template <typename T>
 inline constexpr bool is_trivially_copyable_v = is_trivially_copyable<T>::value;
 
-}  // namespace std
+_PW_POLYFILL_END_NAMESPACE_STD

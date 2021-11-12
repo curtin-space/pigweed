@@ -12,7 +12,7 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
-import("python_script.gni")
+import("python_action.gni")
 
 # Runs a program which isn't in Python.
 #
@@ -72,14 +72,14 @@ template("pw_exec") {
   if (defined(invoker.env_file)) {
     _script_args += [
       "--env-file",
-      get_path_info(invoker.env_file, "abspath"),
+      rebase_path(invoker.env_file, root_build_dir),
     ]
   }
 
   if (defined(invoker.args_file)) {
     _script_args += [
       "--args-file",
-      get_path_info(invoker.args_file, "abspath"),
+      rebase_path(invoker.args_file, root_build_dir),
     ]
 
     if (defined(invoker.skip_empty_args) && invoker.skip_empty_args) {
@@ -98,6 +98,9 @@ template("pw_exec") {
 
   if (!defined(invoker.capture_output) || invoker.capture_output) {
     _script_args += [ "--capture-output" ]
+    _capture_output = true
+  } else {
+    _capture_output = false
   }
 
   _script_args += [
@@ -108,9 +111,10 @@ template("pw_exec") {
     _script_args += invoker.args
   }
 
-  pw_python_script(target_name) {
-    script = "$dir_pw_build/py/exec.py"
+  pw_python_action(target_name) {
+    script = "$dir_pw_build/py/pw_build/exec.py"
     args = _script_args
+    capture_output = _capture_output
 
     forward_variables_from(invoker,
                            [

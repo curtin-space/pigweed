@@ -18,31 +18,22 @@
 #include <cstdint>
 #include <cstring>
 #include <iterator>
+#include <limits>
 
 #include "gtest/gtest.h"
-#include "pw_tokenizer/pw_tokenizer_65599_fixed_length_hash.h"
+#include "pw_tokenizer/hash.h"
 #include "pw_tokenizer_private/tokenize_test.h"
 #include "pw_varint/varint.h"
 
 namespace pw::tokenizer {
 namespace {
 
-// The hash to use for this test. This makes sure the strings are shorter than
-// the configured max length to ensure this test works with any reasonable
-// configuration.
-template <size_t kSize>
-constexpr uint32_t TestHash(const char (&string)[kSize]) {
-  constexpr unsigned kTestHashLength = 48;
-  static_assert(kTestHashLength <= PW_TOKENIZER_CFG_HASH_LENGTH);
-  static_assert(kSize <= kTestHashLength + 1);
-  return PwTokenizer65599FixedLengthHash(std::string_view(string, kSize - 1),
-                                         kTestHashLength);
-}
-
 // Constructs an array with the hashed string followed by the provided bytes.
 template <uint8_t... kData, size_t kSize>
-constexpr auto ExpectedData(const char (&format)[kSize]) {
-  const uint32_t value = TestHash(format);
+constexpr auto ExpectedData(
+    const char (&format)[kSize],
+    uint32_t token_mask = std::numeric_limits<uint32_t>::max()) {
+  const uint32_t value = Hash(format) & token_mask;
   return std::array<uint8_t, sizeof(uint32_t) + sizeof...(kData)>{
       static_cast<uint8_t>(value & 0xff),
       static_cast<uint8_t>(value >> 8 & 0xff),
@@ -51,20 +42,108 @@ constexpr auto ExpectedData(const char (&format)[kSize]) {
       kData...};
 }
 
-TEST(TokenizeStringLiteral, EmptyString_IsZero) {
-  constexpr pw_TokenizerStringToken token = PW_TOKENIZE_STRING("");
+TEST(TokenizeString, EmptyString_IsZero) {
+  constexpr pw_tokenizer_Token token = PW_TOKENIZE_STRING("");
   EXPECT_EQ(0u, token);
 }
 
-TEST(TokenizeStringLiteral, String_MatchesHash) {
+TEST(TokenizeString, String_MatchesHash) {
   constexpr uint32_t token = PW_TOKENIZE_STRING("[:-)");
-  EXPECT_EQ(TestHash("[:-)"), token);
+  EXPECT_EQ(Hash("[:-)"), token);
 }
 
 constexpr uint32_t kGlobalToken = PW_TOKENIZE_STRING(">:-[]");
 
-TEST(TokenizeStringLiteral, GlobalVariable_MatchesHash) {
-  EXPECT_EQ(TestHash(">:-[]"), kGlobalToken);
+TEST(TokenizeString, GlobalVariable_MatchesHash) {
+  EXPECT_EQ(Hash(">:-[]"), kGlobalToken);
+}
+
+struct TokenizedWithinClass {
+  static constexpr uint32_t kThisToken = PW_TOKENIZE_STRING("???");
+};
+
+static_assert(Hash("???") == TokenizedWithinClass::kThisToken);
+
+TEST(TokenizeString, ClassMember_MatchesHash) {
+  EXPECT_EQ(Hash("???"), TokenizedWithinClass().kThisToken);
+}
+
+TEST(TokenizeString, Mask) {
+  [[maybe_unused]] constexpr uint32_t token = PW_TOKENIZE_STRING("(O_o)");
+  [[maybe_unused]] constexpr uint32_t masked_1 =
+      PW_TOKENIZE_STRING_MASK("domain", 0xAAAAAAAA, "(O_o)");
+  [[maybe_unused]] constexpr uint32_t masked_2 =
+      PW_TOKENIZE_STRING_MASK("domain", 0x55555555, "(O_o)");
+  [[maybe_unused]] constexpr uint32_t masked_3 =
+      PW_TOKENIZE_STRING_MASK("domain", 0xFFFF0000, "(O_o)");
+
+  static_assert(token != masked_1 && token != masked_2 && token != masked_3);
+  static_assert(masked_1 != masked_2 && masked_2 != masked_3);
+  static_assert((token & 0xAAAAAAAA) == masked_1);
+  static_assert((token & 0x55555555) == masked_2);
+  static_assert((token & 0xFFFF0000) == masked_3);
+}
+
+// Use a function with a shorter name to test tokenizing __func__ and
+// __PRETTY_FUNCTION__.
+//
+// WARNING: This function might cause errors for compilers other than GCC and
+// clang. It relies on two GCC/clang extensions:
+//
+//   1 - The __PRETTY_FUNCTION__ C++ function name variable.
+//   2 - __func__ as a static constexpr array instead of static const. See
+//       https://gcc.gnu.org/bugzilla/show_bug.cgi?id=66639 for background.
+//
+void TestName() {
+  constexpr uint32_t function_hash = PW_TOKENIZE_STRING(__func__);
+  EXPECT_EQ(pw::tokenizer::Hash(__func__), function_hash);
+
+  // Check the non-standard __PRETTY_FUNCTION__ name.
+  constexpr uint32_t pretty_function = PW_TOKENIZE_STRING(__PRETTY_FUNCTION__);
+  EXPECT_EQ(pw::tokenizer::Hash(__PRETTY_FUNCTION__), pretty_function);
+}
+
+TEST(TokenizeString, FunctionName) { TestName(); }
+
+TEST(TokenizeString, Array) {
+  constexpr char array[] = "won-won-won-wonderful";
+
+  const uint32_t array_hash = PW_TOKENIZE_STRING(array);
+  EXPECT_EQ(Hash(array), array_hash);
+}
+
+TEST(TokenizeString, NullInString) {
+  // Use PW_TOKENIZER_STRING_TOKEN to avoid emitting strings with NUL into the
+  // ELF file. The CSV database format does not support NUL.
+  constexpr char nulls[32] = {};
+  static_assert(Hash(nulls) == PW_TOKENIZER_STRING_TOKEN(nulls));
+  static_assert(PW_TOKENIZER_STRING_TOKEN(nulls) != 0u);
+
+  static_assert(PW_TOKENIZER_STRING_TOKEN("\0") == Hash("\0"));
+  static_assert(PW_TOKENIZER_STRING_TOKEN("\0") != Hash(""));
+
+  static_assert(PW_TOKENIZER_STRING_TOKEN("abc\0def") == Hash("abc\0def"));
+
+  static_assert(Hash("abc\0def") != Hash("abc\0def\0"));
+}
+
+// Verify that we can tokenize multiple strings from one source line.
+#define THREE_FOR_ONE(first, second, third)             \
+  [[maybe_unused]] constexpr uint32_t token_1 =         \
+      PW_TOKENIZE_STRING_DOMAIN("TEST_DOMAIN", first);  \
+  [[maybe_unused]] constexpr uint32_t token_2 =         \
+      PW_TOKENIZE_STRING_DOMAIN("TEST_DOMAIN", second); \
+  [[maybe_unused]] constexpr uint32_t token_3 =         \
+      PW_TOKENIZE_STRING_DOMAIN("TEST_DOMAIN", third);
+
+TEST(TokenizeString, MultipleTokenizationsInOneMacroExpansion) {
+  // This verifies that we can safely tokenize multiple times in a single macro
+  // expansion. This can be useful when for example a name and description are
+  // both tokenized after being passed into a macro.
+  //
+  // This test only verifies that this compiles correctly; it does not test
+  // that the tokenizations make it to the final token database.
+  THREE_FOR_ONE("hello", "yes", "something");
 }
 
 class TokenizeToBuffer : public ::testing::Test {
@@ -221,6 +300,16 @@ TEST_F(TokenizeToBuffer, String_ZeroBytesLeft_WritesNothing) {
   EXPECT_EQ(std::memcmp(empty.data(), buffer_, empty.size()), 0);
 }
 
+TEST_F(TokenizeToBuffer, Array) {
+  static constexpr char array[] = "1234";
+  size_t message_size = 4;
+  PW_TOKENIZE_TO_BUFFER(buffer_, &message_size, array);
+
+  constexpr std::array<uint8_t, 4> result = ExpectedData<>("1234");
+  ASSERT_EQ(result.size(), message_size);
+  EXPECT_EQ(std::memcmp(result.data(), buffer_, result.size()), 0);
+}
+
 TEST_F(TokenizeToBuffer, NullptrString_EncodesNull) {
   char* string = nullptr;
   size_t message_size = 9;
@@ -249,6 +338,23 @@ TEST_F(TokenizeToBuffer, Domain_String) {
       "TEST_DOMAIN", buffer_, &message_size, "The answer was: %s", "5432!");
   constexpr std::array<uint8_t, 10> expected =
       ExpectedData<5, '5', '4', '3', '2', '!'>("The answer was: %s");
+
+  ASSERT_EQ(expected.size(), message_size);
+  EXPECT_EQ(std::memcmp(expected.data(), buffer_, expected.size()), 0);
+}
+
+TEST_F(TokenizeToBuffer, Mask) {
+  size_t message_size = sizeof(buffer_);
+
+  PW_TOKENIZE_TO_BUFFER_MASK("TEST_DOMAIN",
+                             0x0000FFFF,
+                             buffer_,
+                             &message_size,
+                             "The answer was: %s",
+                             "5432!");
+  constexpr std::array<uint8_t, 10> expected =
+      ExpectedData<5, '5', '4', '3', '2', '!'>("The answer was: %s",
+                                               0x0000FFFF);
 
   ASSERT_EQ(expected.size(), message_size);
   EXPECT_EQ(std::memcmp(expected.data(), buffer_, expected.size()), 0);
@@ -295,9 +401,17 @@ TEST_F(TokenizeToBuffer, NoRoomForToken) {
   EXPECT_TRUE(std::all_of(buffer_, std::end(buffer_), is_untouched));
 }
 
+TEST_F(TokenizeToBuffer, CharArray) {
+  size_t message_size = sizeof(buffer_);
+  PW_TOKENIZE_TO_BUFFER(buffer_, &message_size, __func__);
+  constexpr auto expected = ExpectedData(__func__);
+  ASSERT_EQ(expected.size(), message_size);
+  EXPECT_EQ(std::memcmp(expected.data(), buffer_, expected.size()), 0);
+}
+
 TEST_F(TokenizeToBuffer, C_StringShortFloat) {
   size_t size = sizeof(buffer_);
-  pw_TokenizeToBufferTest_StringShortFloat(buffer_, &size);
+  pw_tokenizer_ToBufferTest_StringShortFloat(buffer_, &size);
   constexpr std::array<uint8_t, 11> expected =  // clang-format off
       ExpectedData<1, '1',                 // string '1'
                    3,                      // -2 (zig-zag encoded)
@@ -309,7 +423,7 @@ TEST_F(TokenizeToBuffer, C_StringShortFloat) {
 
 TEST_F(TokenizeToBuffer, C_SequentialZigZag) {
   size_t size = sizeof(buffer_);
-  pw_TokenizeToBufferTest_SequentialZigZag(buffer_, &size);
+  pw_tokenizer_ToBufferTest_SequentialZigZag(buffer_, &size);
   constexpr std::array<uint8_t, 18> expected =
       ExpectedData<0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13>(
           TEST_FORMAT_SEQUENTIAL_ZIG_ZAG);
@@ -323,7 +437,7 @@ TEST_F(TokenizeToBuffer, C_Overflow) {
 
   {
     size_t size = 7;
-    pw_TokenizeToBufferTest_Requires8(buffer_, &size);
+    pw_tokenizer_ToBufferTest_Requires8(buffer_, &size);
     constexpr std::array<uint8_t, 7> expected =
         ExpectedData<2, 'h', 'i'>(TEST_FORMAT_REQUIRES_8);
     ASSERT_EQ(expected.size(), size);
@@ -333,7 +447,7 @@ TEST_F(TokenizeToBuffer, C_Overflow) {
 
   {
     size_t size = 8;
-    pw_TokenizeToBufferTest_Requires8(buffer_, &size);
+    pw_tokenizer_ToBufferTest_Requires8(buffer_, &size);
     constexpr std::array<uint8_t, 8> expected =
         ExpectedData<2, 'h', 'i', 13>(TEST_FORMAT_REQUIRES_8);
     ASSERT_EQ(expected.size(), size);
@@ -402,8 +516,24 @@ TEST_F(TokenizeToCallback, Domain_Strings) {
   EXPECT_EQ(std::memcmp(expected.data(), message_, expected.size()), 0);
 }
 
+TEST_F(TokenizeToCallback, Mask) {
+  PW_TOKENIZE_TO_CALLBACK_MASK(
+      "TEST_DOMAIN", 0x00000FFF, SetMessage, "The answer is: %s", "5432!");
+  constexpr std::array<uint8_t, 10> expected =
+      ExpectedData<5, '5', '4', '3', '2', '!'>("The answer is: %s", 0x00000FFF);
+  ASSERT_EQ(expected.size(), message_size_bytes_);
+  EXPECT_EQ(std::memcmp(expected.data(), message_, expected.size()), 0);
+}
+
+TEST_F(TokenizeToCallback, CharArray) {
+  PW_TOKENIZE_TO_CALLBACK(SetMessage, __func__);
+  constexpr auto expected = ExpectedData(__func__);
+  ASSERT_EQ(expected.size(), message_size_bytes_);
+  EXPECT_EQ(std::memcmp(expected.data(), message_, expected.size()), 0);
+}
+
 TEST_F(TokenizeToCallback, C_SequentialZigZag) {
-  pw_TokenizeToCallbackTest_SequentialZigZag(SetMessage);
+  pw_tokenizer_ToCallbackTest_SequentialZigZag(SetMessage);
 
   constexpr std::array<uint8_t, 18> expected =
       ExpectedData<0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13>(
@@ -412,11 +542,10 @@ TEST_F(TokenizeToCallback, C_SequentialZigZag) {
   EXPECT_EQ(std::memcmp(expected.data(), message_, expected.size()), 0);
 }
 
-// Hijack the PW_TOKENIZE_STRING_DOMAIN macro to capture the domain name.
-#undef PW_TOKENIZE_STRING_DOMAIN
-#define PW_TOKENIZE_STRING_DOMAIN(domain, string)                 \
-  /* assigned to a variable */ PW_TOKENIZER_STRING_TOKEN(string); \
-  tokenizer_domain = domain;                                      \
+// Hijack an internal macro to capture the tokenizer domain.
+#undef _PW_TOKENIZER_RECORD_ORIGINAL_STRING
+#define _PW_TOKENIZER_RECORD_ORIGINAL_STRING(token, domain, string) \
+  tokenizer_domain = domain;                                        \
   string_literal = string
 
 TEST_F(TokenizeToBuffer, Domain_Default) {

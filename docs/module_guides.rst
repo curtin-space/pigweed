@@ -1,3 +1,5 @@
+.. _docs-module-guides:
+
 =============
 Module Guides
 =============
@@ -6,7 +8,7 @@ Modules may contain code from multiple languages, including C, C++, Go, Rust,
 Shell, Batch and Python.
 
 .. toctree::
-  :maxdepth: 1
+  :titlesonly:
   :glob:
 
   */docs

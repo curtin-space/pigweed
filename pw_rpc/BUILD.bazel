@@ -1,0 +1,329 @@
+# Copyright 2020 The Pigweed Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License"); you may not
+# use this file except in compliance with the License. You may obtain a copy of
+# the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+# WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+# License for the specific language governing permissions and limitations under
+# the License.
+
+load("//pw_build:pigweed.bzl", "pw_cc_library", "pw_cc_test")
+load("//pw_protobuf_compiler:proto.bzl", "pw_proto_library")
+load("@com_google_protobuf//:protobuf.bzl", "py_proto_library")
+load("@rules_proto//proto:defs.bzl", "proto_library")
+load("@rules_proto_grpc//:defs.bzl", "proto_plugin")
+load("@rules_proto_grpc//js:defs.bzl", "js_proto_library")
+
+package(default_visibility = ["//visibility:public"])
+
+licenses(["notice"])
+
+proto_library(
+    name = "benchmark_proto",
+    srcs = [
+        "benchmark.proto",
+    ],
+)
+
+pw_proto_library(
+    name = "benchmark_pwpb",
+    deps = [":benchmark_proto"],
+)
+
+pw_cc_library(
+    name = "benchmark",
+    srcs = ["benchmark.cc"],
+    hdrs = ["public/pw_rpc/benchmark.h"],
+    includes = ["public"],
+    deps = [
+        ":benchmark_pwpb",
+        # TODO(hepler): RPC deps not used directly should be provided by the proto library
+        ":pw_rpc",
+        "//pw_rpc/raw:server_api",
+        "//pw_rpc/raw:client_api",
+    ],
+)
+
+# TODO(hepler): Build this as a cc_binary and use it in integration tests.
+filegroup(
+    name = "test_rpc_server",
+    srcs = ["test_rpc_server.cc"],
+    # deps = [
+    #     "system_server",
+    #     ":benchmark",
+    #     "//pw_log",
+    # ],
+)
+
+pw_cc_library(
+    name = "client_server",
+    srcs = ["client_server.cc"],
+    hdrs = ["public/pw_rpc/client_server.h"],
+    deps = [":pw_rpc"],
+)
+
+pw_cc_library(
+    name = "pw_rpc",
+    srcs = [
+        "call.cc",
+        "channel.cc",
+        "client.cc",
+        "client_call.cc",
+        "endpoint.cc",
+        "packet.cc",
+        "public/pw_rpc/internal/call.h",
+        "public/pw_rpc/internal/call_context.h",
+        "public/pw_rpc/internal/channel.h",
+        "public/pw_rpc/internal/client_call.h",
+        "public/pw_rpc/internal/config.h",
+        "public/pw_rpc/internal/endpoint.h",
+        "public/pw_rpc/internal/hash.h",
+        "public/pw_rpc/internal/lock.h",
+        "public/pw_rpc/internal/method.h",
+        "public/pw_rpc/internal/method_info.h",
+        "public/pw_rpc/internal/method_lookup.h",
+        "public/pw_rpc/internal/method_union.h",
+        "public/pw_rpc/internal/open_call.h",
+        "public/pw_rpc/internal/packet.h",
+        "public/pw_rpc/internal/server_call.h",
+        "public/pw_rpc/method_type.h",
+        "server.cc",
+        "server_call.cc",
+        "service.cc",
+    ],
+    hdrs = [
+        "public/pw_rpc/channel.h",
+        "public/pw_rpc/client.h",
+        "public/pw_rpc/internal/service_client.h",
+        "public/pw_rpc/server.h",
+        "public/pw_rpc/server_context.h",
+        "public/pw_rpc/service.h",
+    ],
+    includes = ["public"],
+    deps = [
+        ":internal_packet_pwpb",
+        "//pw_assert",
+        "//pw_bytes",
+        "//pw_containers",
+        "//pw_containers:intrusive_list",
+        "//pw_function",
+        "//pw_log",
+        "//pw_result",
+        "//pw_rpc/system_server",
+        "//pw_span",
+        "//pw_status",
+        "//pw_sync:lock_annotations",
+    ],
+)
+
+pw_cc_library(
+    name = "synchronized_channel_output",
+    hdrs = ["public/pw_rpc/synchronized_channel_output.h"],
+    includes = ["public"],
+    deps = [
+        ":pw_rpc",
+        "//pw_sync:lock_annotations",
+        "//pw_sync:mutex",
+    ],
+)
+
+pw_cc_library(
+    name = "internal_test_utils",
+    srcs = ["fake_channel_output.cc"],
+    hdrs = [
+        "public/pw_rpc/internal/fake_channel_output.h",
+        "public/pw_rpc/internal/method_impl_tester.h",
+        "public/pw_rpc/internal/method_info_tester.h",
+        "public/pw_rpc/internal/test_method.h",
+        "public/pw_rpc/internal/test_method_context.h",
+        "public/pw_rpc/internal/test_utils.h",
+        "public/pw_rpc/payloads_view.h",
+        "pw_rpc_private/fake_server_reader_writer.h",
+    ],
+    includes = [
+        ".",
+        "public",
+    ],
+    visibility = [":__subpackages__"],
+    deps = [
+        ":pw_rpc",
+        "//pw_assert",
+        "//pw_bytes",
+        "//pw_containers:filtered_view",
+        "//pw_containers:vector",
+        "//pw_containers:wrapped_iterator",
+        "//pw_span",
+    ],
+)
+
+# TODO(pwbug/507): Add the client integration test to the build.
+filegroup(
+    name = "client_integration_test",
+    srcs = ["client_integration_test.cc"],
+)
+
+# TODO(pwbug/507): Cannot build nanopb-dependent code in Bazel at the moment. Need
+# to determine how best to support Nanopb builds and protobuf generation.
+filegroup(
+    name = "nanopb",
+    srcs = [
+        "nanopb/client_call_test.cc",
+        "nanopb/client_integration_test.cc",
+        "nanopb/client_reader_writer_test.cc",
+        "nanopb/codegen_test.cc",
+        "nanopb/common.cc",
+        "nanopb/echo_service_test.cc",
+        "nanopb/method.cc",
+        "nanopb/method_info_test.cc",
+        "nanopb/method_lookup_test.cc",
+        "nanopb/method_test.cc",
+        "nanopb/method_union_test.cc",
+        "nanopb/public/pw_rpc/echo_service_nanopb.h",
+        "nanopb/public/pw_rpc/nanopb/client_reader_writer.h",
+        "nanopb/public/pw_rpc/nanopb/client_testing.h",
+        "nanopb/public/pw_rpc/nanopb/fake_channel_output.h",
+        "nanopb/public/pw_rpc/nanopb/internal/common.h",
+        "nanopb/public/pw_rpc/nanopb/internal/method.h",
+        "nanopb/public/pw_rpc/nanopb/internal/method_union.h",
+        "nanopb/public/pw_rpc/nanopb/server_reader_writer.h",
+        "nanopb/public/pw_rpc/nanopb/test_method_context.h",
+        "nanopb/pw_rpc_nanopb_private/internal_test_utils.h",
+        "nanopb/server_reader_writer.cc",
+        "nanopb/server_reader_writer_test.cc",
+        "nanopb/stub_generation_test.cc",
+    ],
+)
+
+pw_cc_test(
+    name = "call_test",
+    srcs = [
+        "call_test.cc",
+    ],
+    deps = [
+        ":internal_test_utils",
+        ":pw_rpc",
+    ],
+)
+
+pw_cc_test(
+    name = "channel_test",
+    srcs = ["channel_test.cc"],
+    deps = [
+        ":internal_test_utils",
+        ":pw_rpc",
+    ],
+)
+
+pw_cc_test(
+    name = "method_test",
+    srcs = ["method_test.cc"],
+    deps = [
+        ":internal_test_utils",
+        ":pw_rpc",
+    ],
+)
+
+pw_cc_test(
+    name = "packet_test",
+    srcs = [
+        "packet_test.cc",
+    ],
+    deps = [
+        ":pw_rpc",
+    ],
+)
+
+pw_cc_test(
+    name = "client_server_test",
+    srcs = ["client_server_test.cc"],
+    deps = [
+        ":client_server",
+        ":internal_test_utils",
+        "//pw_rpc/raw:server_api",
+    ],
+)
+
+proto_library(
+    name = "packet_proto",
+    srcs = [
+        "internal/packet.proto",
+    ],
+)
+
+pw_cc_test(
+    name = "server_test",
+    srcs = [
+        "server_test.cc",
+    ],
+    deps = [
+        ":internal_test_utils",
+        ":pw_rpc",
+        "//pw_assert",
+    ],
+)
+
+pw_cc_test(
+    name = "service_test",
+    srcs = [
+        "service_test.cc",
+    ],
+    deps = [
+        ":internal_test_utils",
+        ":pw_rpc",
+        "//pw_assert",
+    ],
+)
+
+pw_cc_test(
+    name = "fake_channel_output_test",
+    srcs = ["fake_channel_output_test.cc"],
+    deps = [":internal_test_utils"],
+)
+
+proto_library(
+    name = "internal_packet_proto",
+    srcs = ["internal/packet.proto"],
+    visibility = ["//visibility:private"],
+)
+
+js_proto_library(
+    name = "packet_proto_tspb",
+    protos = [":packet_proto"],
+)
+
+py_proto_library(
+    name = "internal_packet_proto_pb2",
+    srcs = ["internal/packet.proto"],
+)
+
+pw_proto_library(
+    name = "internal_packet_pwpb",
+    deps = [":internal_packet_proto"],
+)
+
+proto_library(
+    name = "pw_rpc_test_proto",
+    srcs = ["pw_rpc_test_protos/test.proto"],
+    strip_import_prefix = "//pw_rpc",
+)
+
+pw_proto_library(
+    name = "pw_rpc_test_pwpb",
+    deps = [":pw_rpc_test_proto"],
+)
+
+proto_plugin(
+    name = "pw_cc_plugin",
+    outputs = [
+        "{protopath}.raw_rpc.pb.h",
+    ],
+    protoc_plugin_name = "raw_rpc",
+    tool = "@pigweed//pw_rpc/py:plugin",
+    use_built_in_shell_environment = True,
+    visibility = ["//visibility:public"],
+)

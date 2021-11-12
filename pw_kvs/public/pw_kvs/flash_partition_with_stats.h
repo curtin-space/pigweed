@@ -38,8 +38,8 @@ class FlashPartitionWithStats : public FlashPartition {
 
   Status Erase(Address address, size_t num_sectors) override;
 
-  span<size_t> sector_erase_counters() {
-    return span(sector_counters_.data(), sector_counters_.size());
+  std::span<size_t> sector_erase_counters() {
+    return std::span(sector_counters_.data(), sector_counters_.size());
   }
 
   size_t min_erase_count() const {
@@ -63,7 +63,8 @@ class FlashPartitionWithStats : public FlashPartition {
   }
 
   size_t total_erase_count() const {
-    return std::accumulate(sector_counters_.begin(), sector_counters_.end(), 0);
+    return std::accumulate(
+        sector_counters_.begin(), sector_counters_.end(), 0ul);
   }
 
   void ResetCounters() { sector_counters_.assign(sector_count(), 0); }

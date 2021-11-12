@@ -1,4 +1,4 @@
-# Copyright 2019 The Pigweed Authors
+# Copyright 2021 The Pigweed Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not
 # use this file except in compliance with the License. You may obtain a copy of
@@ -13,21 +13,6 @@
 # the License.
 """pw_module"""
 
-import unittest
-import setuptools
+import setuptools  # type: ignore
 
-
-def test_suite():
-    """Test suite for pw_module module."""
-    return unittest.TestLoader().discover('./', pattern='*_test.py')
-
-
-setuptools.setup(
-    name='pw_module',
-    version='0.0.1',
-    author='Pigweed Authors',
-    author_email='pigweed-developers@googlegroups.com',
-    description='Meta-module for Pigweed',
-    packages=setuptools.find_packages(),
-    test_suite='setup.test_suite',
-)
+setuptools.setup()  # Package definition in setup.cfg

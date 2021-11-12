@@ -1,6 +1,4 @@
-.. default-domain:: cpp
-
-.. highlight:: sh
+.. _module-pw_varint:
 
 ---------
 pw_varint
@@ -16,7 +14,7 @@ use a variable-length encoding for integers.
 Compatibility
 =============
 * C
-* C++11 (with :doc:`../pw_polyfill/docs`)
+* C++14 (with :doc:`../pw_polyfill/docs`)
 
 API
 ===
@@ -29,6 +27,11 @@ and unsigned integers.
 .. cpp:function:: size_t ZigZagEncodedSize(int64_t integer)
 
 Returns the size of a signed integer when ZigZag encoded as a varint.
+
+.. cpp:function:: uint64_t MaxValueInBytes(size_t bytes)
+
+Returns the maximum integer value that can be encoded as a varint into the
+specified number of bytes.
 
 Dependencies
 ============

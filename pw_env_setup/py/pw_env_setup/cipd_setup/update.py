@@ -24,10 +24,10 @@ from __future__ import print_function
 import argparse
 import json
 import os
-import shutil
+import platform
+import re
 import subprocess
 import sys
-import tempfile
 
 
 def parse(argv=None):
@@ -48,6 +48,7 @@ def parse(argv=None):
     )
     parser.add_argument('--package-file',
                         dest='package_files',
+                        metavar='PACKAGE_FILE',
                         action='append')
     parser.add_argument('--cipd',
                         default=os.path.join(script_root, 'wrapper.py'))
@@ -59,53 +60,129 @@ def parse(argv=None):
     return parser.parse_args(argv)
 
 
-def check_auth(cipd, paths=('pigweed', )):
+def check_auth(cipd, package_files, spin):
     """Check have access to CIPD pigweed directory."""
 
+    paths = []
+    for package_file in package_files:
+        with open(package_file, 'r') as ins:
+            # This is an expensive RPC, so only check the first few entries
+            # in each file.
+            for i, entry in enumerate(json.load(ins)):
+                if i >= 3:
+                    break
+                parts = entry['path'].split('/')
+                while '${' in parts[-1]:
+                    parts.pop(-1)
+                paths.append('/'.join(parts))
+
+    username = None
     try:
-        subprocess.check_output([cipd, 'auth-info'], stderr=subprocess.STDOUT)
+        output = subprocess.check_output([cipd, 'auth-info'],
+                                         stderr=subprocess.STDOUT).decode()
         logged_in = True
+
+        match = re.search(r'Logged in as (\S*)\.', output)
+        if match:
+            username = match.group(1)
+
     except subprocess.CalledProcessError:
         logged_in = False
 
-    for path in paths:
-        # Not catching CalledProcessError because 'cipd ls' seems to never
-        # return an error code.
-        output = subprocess.check_output([cipd, 'ls', path],
-                                         stderr=subprocess.STDOUT).decode()
-        if 'No matching packages' in output:
-            print()
-            print('=' * 60, file=sys.stderr)
-            if logged_in:
-                print('ERROR: no access to CIPD path "{}":'.format(path),
-                      file=sys.stderr)
-            else:
-                print('ERROR: no access to CIPD path "{}", try logging in '
-                      'with this command:'.format(path),
-                      file=sys.stderr)
-                print(cipd, 'auth-login', file=sys.stderr)
-            print('=' * 60, file=sys.stderr)
-            return False
+    def _check_all_paths():
+        inaccessible_paths = []
+
+        for path in paths:
+            # Not catching CalledProcessError because 'cipd ls' seems to never
+            # return an error code unless it can't reach the CIPD server.
+            output = subprocess.check_output(
+                [cipd, 'ls', path], stderr=subprocess.STDOUT).decode()
+            if 'No matching packages' not in output:
+                continue
+
+            # 'cipd ls' only lists sub-packages but ignores any packages at the
+            # given path. 'cipd instances' will give versions of that package.
+            # 'cipd instances' does use an error code if there's no such package
+            # or that package is inaccessible.
+            try:
+                subprocess.check_output([cipd, 'instances', path],
+                                        stderr=subprocess.STDOUT)
+            except subprocess.CalledProcessError:
+                inaccessible_paths.append(path)
+
+        return inaccessible_paths
+
+    inaccessible_paths = _check_all_paths()
+
+    if inaccessible_paths and not logged_in:
+        with spin.pause():
+            stderr = lambda *args: print(*args, file=sys.stderr)
+            stderr()
+            stderr('No access to the following CIPD paths:')
+            for path in inaccessible_paths:
+                stderr('  {}'.format(path))
+            stderr()
+            stderr('Attempting CIPD login')
+            try:
+                subprocess.check_call([cipd, 'auth-login'])
+            except subprocess.CalledProcessError:
+                stderr('CIPD login failed')
+                return False
+
+        inaccessible_paths = _check_all_paths()
+
+    if inaccessible_paths:
+        stderr = lambda *args: print(*args, file=sys.stderr)
+        stderr('=' * 60)
+        username_part = ''
+        if username:
+            username_part = '({}) '.format(username)
+        stderr('Your account {}does not have access to the following '
+               'paths'.format(username_part))
+        for path in inaccessible_paths:
+            stderr('  {}'.format(path))
+        stderr('=' * 60)
+        return False
 
     return True
 
 
+def _platform():
+    osname = {
+        'darwin': 'mac',
+        'linux': 'linux',
+        'windows': 'windows',
+    }[platform.system().lower()]
+
+    if platform.machine().startswith(('aarch64', 'armv8')):
+        arch = 'arm64'
+    elif platform.machine() == 'x86_64':
+        arch = 'amd64'
+    elif platform.machine() == 'i686':
+        arch = 'i386'
+    else:
+        arch = platform.machine()
+
+    return '{}-{}'.format(osname, arch).lower()
+
+
 def write_ensure_file(package_file, ensure_file):
     with open(package_file, 'r') as ins:
-        data = json.load(ins)
-
-    # TODO(pwbug/103) Remove 30 days after bug fixed.
-    if os.path.isdir(ensure_file):
-        shutil.rmtree(ensure_file)
+        packages = json.load(ins)
 
     with open(ensure_file, 'w') as outs:
         outs.write('$VerifiedPlatform linux-amd64\n'
                    '$VerifiedPlatform mac-amd64\n'
                    '$ParanoidMode CheckPresence\n')
 
-        for entry in data:
-            outs.write('{} {}\n'.format(entry['path'],
-                                        ' '.join(entry['tags'])))
+        for pkg in packages:
+            # If this is a new-style package manifest platform handling must
+            # be done here instead of by the cipd executable.
+            if 'platforms' in pkg and _platform() not in pkg['platforms']:
+                continue
+
+            outs.write('@Subdir {}\n'.format(pkg.get('subdir', '')))
+            outs.write('{} {}\n'.format(pkg['path'], ' '.join(pkg['tags'])))
 
 
 def update(
@@ -114,10 +191,11 @@ def update(
     root_install_dir,
     cache_dir,
     env_vars=None,
+    spin=None,
 ):
     """Grab the tools listed in ensure_files."""
 
-    if not check_auth(cipd):
+    if not check_auth(cipd, package_files, spin):
         return False
 
     # TODO(mohrr) use os.makedirs(..., exist_ok=True).
@@ -150,31 +228,35 @@ def update(
             root_install_dir,
             os.path.basename(os.path.splitext(package_file)[0]))
 
+        name = os.path.basename(install_dir)
+
         cmd = [
             cipd,
             'ensure',
             '-ensure-file', ensure_file,
             '-root', install_dir,
-            '-log-level', 'warning',
+            '-log-level', 'debug',
+            '-json-output',
+            os.path.join(root_install_dir, '{}-output.json'.format(name)),
+            '-cache-dir', cache_dir,
             '-max-threads', '0',  # 0 means use CPU count.
         ]  # yapf: disable
 
         # TODO(pwbug/135) Use function from common utility module.
-        with tempfile.TemporaryFile(mode='w+') as temp:
-            print(*cmd, file=temp)
-            try:
+        log = os.path.join(root_install_dir, '{}.log'.format(name))
+        try:
+            with open(log, 'w') as outs:
+                print(*cmd, file=outs)
                 subprocess.check_call(cmd,
-                                      stdout=temp,
+                                      stdout=outs,
                                       stderr=subprocess.STDOUT)
-            except subprocess.CalledProcessError:
-                temp.seek(0)
-                sys.stderr.write(temp.read())
+        except subprocess.CalledProcessError:
+            with open(log, 'r') as ins:
+                sys.stderr.write(ins.read())
                 raise
 
         # Set environment variables so tools can later find things under, for
         # example, 'share'.
-        name = os.path.basename(install_dir)
-
         if env_vars:
             # Some executables get installed at top-level and some get
             # installed under 'bin'.

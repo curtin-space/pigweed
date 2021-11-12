@@ -1,8 +1,4 @@
-.. _chapter-pw-bytes:
-
-.. default-domain:: cpp
-
-.. highlight:: sh
+.. _module-pw_bytes:
 
 ---------
 pw_bytes
@@ -22,11 +18,51 @@ Dependencies
 Features
 ========
 
-pw::ByteBuilder
------------------
-ByteBuilder is a utility class which facilitates the creation and
-building of formatted bytes in a fixed-size buffer.
+pw_bytes/array.h
+----------------
+Functions for working with byte arrays, primarily for building fixed-size byte
+arrays at compile time.
 
-Future work
-^^^^^^^^^^^
-* Adding Endianness
+pw_bytes/byte_builder.h
+-----------------------
+.. cpp:class:: ByteBuilder
+
+  ``ByteBuilder`` is a class that facilitates building or reading arrays of
+  bytes in a fixed-size buffer. ByteBuilder handles reading and writing integers
+  with varying endianness.
+
+.. cpp:class:: template <size_t kMaxSize> ByteBuffer
+
+  ``ByteBuilder`` with an internally allocated buffer.
+
+Size report: using ByteBuffer
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+.. include:: byte_builder_size_report
+
+pw_bytes/endian.h
+-----------------
+Functions for converting the endianness of integral values.
+
+pw_bytes/units.h
+----------------
+Constants and helper user-defined literals for specifying a number of bytes in
+powers of two, as defined by IEC 60027-2 A.2 and ISO/IEC 80000:13-2008.
+
+The supported suffixes include:
+ * ``_B``   for bytes     (1024^0)
+ * ``_KiB`` for kibibytes (1024^1)
+ * ``_MiB`` for mibibytes (1024^2)
+ * ``_GiB`` for gibibytes (1024^3)
+ * ``_TiB`` for tebibytes (1024^4)
+ * ``_PiB`` for pebibytes (1024^5)
+ * ``_EiB`` for exbibytes (1024^6)
+
+In order to use these you must use a using namespace directive, for example:
+
+.. code-block:: cpp
+
+  #include "pw_bytes/units.h"
+
+  using namespace pw::bytes::unit_literals;
+
+  constexpr size_t kRandomBufferSizeBytes = 1_MiB + 42_KiB;

@@ -19,6 +19,7 @@
 #include <cstring>
 
 #include "pw_log/levels.h"
+#include "pw_log_basic_private/config.h"
 #include "pw_string/string_builder.h"
 #include "pw_sys_io/sys_io.h"
 
@@ -37,16 +38,7 @@
 #define RESET     "\033[0m"
 // clang-format on
 
-#ifndef PW_EMOJI
-#define PW_EMOJI 0
-#endif  // PW_EMOJI
-
-// TODO(pwbug/17): Expose these through the config system.
-#define PW_LOG_SHOW_FILENAME 0
-#define PW_LOG_SHOW_FUNCTION 0
-#define PW_LOG_SHOW_FLAG 0
-#define PW_LOG_SHOW_MODULE 0
-
+namespace pw::log_basic {
 namespace {
 
 const char* LogLevelToLogLevelName(int level) {
@@ -91,6 +83,11 @@ const char* GetFileBasename(const char* filename) {
 }
 #endif  // PW_LOG_SHOW_FILENAME
 
+void (*write_log)(std::string_view) = [](std::string_view log) {
+  sys_io::WriteLine(log)
+      .IgnoreError();  // TODO(pwbug/387): Handle Status properly
+};
+
 }  // namespace
 
 // This is a fully loaded, inefficient-at-the-callsite, log implementation.
@@ -105,19 +102,23 @@ extern "C" void pw_Log(int level,
   // Accumulate the log message in this buffer, then output it.
   pw::StringBuffer<150> buffer;
 
+  // Column: Timestamp
+  // Note that this macro method defaults to a no-op.
+  PW_LOG_APPEND_TIMESTAMP(buffer);
+
   // Column: Filename
 #if PW_LOG_SHOW_FILENAME
   buffer.Format(" %-30s:%4d |", GetFileBasename(file_name), line_number);
 #else
-  PW_UNUSED(file_name);
-  PW_UNUSED(line_number);
+  static_cast<void>(file_name);
+  static_cast<void>(line_number);
 #endif
 
   // Column: Function
 #if PW_LOG_SHOW_FUNCTION
   buffer.Format(" %20s |", function_name);
 #else
-  PW_UNUSED(function_name);
+  static_cast<void>(function_name);
 #endif
 
   // Column: Module
@@ -126,7 +127,7 @@ extern "C" void pw_Log(int level,
   buffer.Format("%3s", module_name);
   buffer << RESET " ";
 #else
-  PW_UNUSED(module_name);
+  static_cast<void>(module_name);
 #endif  // PW_LOG_SHOW_MODULE
 
   // Column: Flag
@@ -138,7 +139,7 @@ extern "C" void pw_Log(int level,
 #endif  // PW_EMOJI
   buffer << " ";
 #else
-  PW_UNUSED(flags);
+  static_cast<void>(flags);
 #endif  // PW_LOG_SHOW_FLAG
 
   // Column: Level
@@ -151,5 +152,11 @@ extern "C" void pw_Log(int level,
   va_end(args);
 
   // All done; flush the log.
-  pw::sys_io::WriteLine(buffer.view());
+  write_log(buffer);
 }
+
+void SetOutput(void (*log_output)(std::string_view log)) {
+  write_log = log_output;
+}
+
+}  // namespace pw::log_basic

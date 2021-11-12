@@ -24,8 +24,8 @@ namespace pw {
 void StringBuilder::clear() {
   size_ = 0;
   NullTerminate();
-  status_ = Status::OK;
-  last_status_ = Status::OK;
+  status_ = OkStatus();
+  last_status_ = OkStatus();
 }
 
 StringBuilder& StringBuilder::append(size_t count, char ch) {
@@ -44,7 +44,7 @@ StringBuilder& StringBuilder::append(const char* str) {
   // Use buffer_.size() - size() as the maximum length so that strings too long
   // to fit in the buffer will request one character too many, which sets the
   // status to RESOURCE_EXHAUSTED.
-  return append(str, string::Length(str, buffer_.size() - size()));
+  return append(string::ClampedCString(str, buffer_.size() - size()));
 }
 
 StringBuilder& StringBuilder::append(const std::string_view& str) {
@@ -55,7 +55,7 @@ StringBuilder& StringBuilder::append(const std::string_view& str,
                                      size_t pos,
                                      size_t count) {
   if (pos > str.size()) {
-    SetErrorStatus(Status::OUT_OF_RANGE);
+    SetErrorStatus(Status::OutOfRange());
     return *this;
   }
 
@@ -68,9 +68,9 @@ size_t StringBuilder::ResizeAndTerminate(size_t chars_to_append) {
   NullTerminate();
 
   if (buffer_.empty() || chars_to_append != copied) {
-    SetErrorStatus(Status::RESOURCE_EXHAUSTED);
+    SetErrorStatus(Status::ResourceExhausted());
   } else {
-    last_status_ = Status::OK;
+    last_status_ = OkStatus();
   }
   return copied;
 }
@@ -79,9 +79,9 @@ void StringBuilder::resize(size_t new_size) {
   if (new_size <= size_) {
     size_ = new_size;
     NullTerminate();
-    last_status_ = Status::OK;
+    last_status_ = OkStatus();
   } else {
-    SetErrorStatus(Status::OUT_OF_RANGE);
+    SetErrorStatus(Status::OutOfRange());
   }
 }
 

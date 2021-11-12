@@ -13,7 +13,7 @@
 // the License.
 
 #include "gtest/gtest.h"
-#include "pw_protobuf_compiler_protos/nanopb_test.pb.h"
+#include "pw_protobuf_compiler_nanopb_protos/nanopb_test.pb.h"
 
 TEST(Nanopb, CompilesProtobufs) {
   pw_protobuf_compiler_Point point = {4, 8, "point"};

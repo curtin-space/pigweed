@@ -17,12 +17,12 @@
 #include <cstdarg>
 #include <cstddef>
 #include <cstring>
+#include <span>
 #include <string_view>
 #include <type_traits>
 #include <utility>
 
 #include "pw_preprocessor/compiler.h"
-#include "pw_span/span.h"
 #include "pw_status/status.h"
 #include "pw_status/status_with_size.h"
 #include "pw_string/to_string.h"
@@ -41,54 +41,44 @@ namespace pw {
 // StringBuilder supports C++-style << output, similar to std::ostringstream. It
 // also supports std::string-like append functions and printf-style output.
 //
-// StringBuilder uses the ToString function to support arbitrary types. Defining
-// a ToString overload in the pw::string namespace allows writing that type to a
-// StringBuilder with <<.
+// Support for custom types is added by overloading operator<< in the same
+// namespace as the custom type. For example:
 //
-// For example, the following ToString overload allows writing MyStatus objects
-// to StringBuilders:
+//   namespace my_project {
 //
-//   namespace pw::string {
+//   struct MyType {
+//     int foo;
+//     const char* bar;
+//   };
 //
-//   StatusWithSize ToString(MyStatus value, const span<char>& buffer) {
-//     return CopyString(MyStatusString(value), buffer);
-//   }
-//
-//   }  // namespace pw::string
-//
-// For complex types, it may be easier to override StringBuilder's << operator,
-// similar to the standard library's std::ostream. For example:
-//
-//   namespace pw::string {
-//
-//   StringBuilder& operator<<(StringBuilder& sb, const MyType& value) {
+//   pw::StringBuilder& operator<<(pw::StringBuilder& sb, const MyType& value) {
 //     return sb << "MyType(" << value.foo << ", " << value.bar << ')';
 //   }
 //
-//   }  // namespace pw::string
+//   }  // namespace my_project
 //
-// Alternately, complex types may use a StringBuilder in their ToString, but it
-// is likely to be simpler to override StringBuilder's operator<<.
+// The ToString template function can be specialized to support custom types
+// with StringBuilder, though overloading operator<< is generally preferred. For
+// example:
 //
-// StringBuilder is safe, flexible, and results in much smaller code size than
-// using std::ostringstream. However, applications sensitive to code size should
-// use StringBuilder with care.
+//   namespace pw {
 //
-// The fixed code size cost of StringBuilder is significant, though smaller than
-// std::snprintf. Using StringBuilder's << and append methods exclusively in
-// place of snprintf reduces code size, but snprintf may be difficult to avoid.
+//   template <>
+//   StatusWithSize ToString<MyStatus>(MyStatus value, std::span<char> buffer) {
+//     return Copy(MyStatusString(value), buffer);
+//   }
 //
-// The incremental code size cost of StringBuilder is comparable to snprintf if
-// errors are handled. Each argument to StringBuilder's << expands to a function
-// call, but one or two StringBuilder appends may have a smaller code size
-// impact than a single snprintf call. See the size report for further analysis.
+//   }  // namespace pw
+//
 class StringBuilder {
  public:
   // Creates an empty StringBuilder.
-  constexpr StringBuilder(const span<char>& buffer)
-      : buffer_(buffer), size_(0) {
+  constexpr StringBuilder(std::span<char> buffer) : buffer_(buffer), size_(0) {
     NullTerminate();
   }
+  StringBuilder(std::span<std::byte> buffer)
+      : StringBuilder(
+            {reinterpret_cast<char*>(buffer.data()), buffer.size_bytes()}) {}
 
   // Disallow copy/assign to avoid confusion about where the string is actually
   // stored. StringBuffers may be copied into one another.
@@ -108,9 +98,9 @@ class StringBuilder {
   // passed into functions that take a std::string_view.
   operator std::string_view() const { return view(); }
 
-  // Returns a span<const std::byte> representation of this StringBuffer.
-  span<const std::byte> as_bytes() const {
-    return span(reinterpret_cast<const std::byte*>(buffer_.data()), size_);
+  // Returns a std::span<const std::byte> representation of this StringBuffer.
+  std::span<const std::byte> as_bytes() const {
+    return std::span(reinterpret_cast<const std::byte*>(buffer_.data()), size_);
   }
 
   // Returns the StringBuilder's status, which reflects the most recent error
@@ -132,7 +122,7 @@ class StringBuilder {
   // The status from the last operation. May be OK while status() is not OK.
   Status last_status() const { return last_status_; }
 
-  // True if status() is Status::OK.
+  // True if status() is OkStatus().
   bool ok() const { return status_.ok(); }
 
   // True if the string is empty.
@@ -147,10 +137,10 @@ class StringBuilder {
   // Clears the string and resets its error state.
   void clear();
 
-  // Sets the statuses to Status::OK;
+  // Sets the statuses to OkStatus();
   void clear_status() {
-    status_ = Status::OK;
-    last_status_ = Status::OK;
+    status_ = OkStatus();
+    last_status_ = OkStatus();
   }
 
   // Appends a single character. Stets the status to RESOURCE_EXHAUSTED if the
@@ -242,7 +232,7 @@ class StringBuilder {
 
  protected:
   // Functions to support StringBuffer copies.
-  constexpr StringBuilder(const span<char>& buffer, const StringBuilder& other)
+  constexpr StringBuilder(std::span<char> buffer, const StringBuilder& other)
       : buffer_(buffer),
         size_(other.size_),
         status_(other.status_),
@@ -263,7 +253,7 @@ class StringBuilder {
 
   void SetErrorStatus(Status status);
 
-  const span<char> buffer_;
+  const std::span<char> buffer_;
 
   size_t size_;
   Status status_;

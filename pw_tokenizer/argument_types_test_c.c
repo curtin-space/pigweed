@@ -24,7 +24,7 @@
 #error "This is a test of C code and must be compiled as C, not C++."
 #endif  // __cplusplus
 
-struct DummyType {};  // stand-in type for pointer argument type test
+struct FakeType {};  // stand-in type for pointer argument type test
 
 // Check each relevant type mapping using static_asserts.
 #define CHECK_TYPE(c_type, enum_type)                     \
@@ -62,7 +62,7 @@ CHECK_TYPE(signed char*,      _PW_TOKENIZER_SELECT_INT_TYPE(void*));
 CHECK_TYPE(unsigned char*,    _PW_TOKENIZER_SELECT_INT_TYPE(void*));
 CHECK_TYPE(int*,              _PW_TOKENIZER_SELECT_INT_TYPE(void*));
 CHECK_TYPE(long long*,        _PW_TOKENIZER_SELECT_INT_TYPE(void*));
-CHECK_TYPE(struct DummyType*, _PW_TOKENIZER_SELECT_INT_TYPE(void*));
+CHECK_TYPE(struct FakeType*,  _PW_TOKENIZER_SELECT_INT_TYPE(void*));
 // clang-format on
 
 // null
@@ -72,10 +72,10 @@ static_assert(_PW_VARARGS_TYPE(NULL) == _PW_TOKENIZER_SELECT_INT_TYPE(void*),
 static char char_array[16];
 
 // Define the test functions that are called by the C++ unit test.
-#define DEFINE_TEST_FUNCTION(name, ...)               \
-  pw_TokenizerArgTypes pw_TestTokenizer##name(void) { \
-    (void)char_array;                                 \
-    return PW_TOKENIZER_ARG_TYPES(__VA_ARGS__);       \
+#define DEFINE_TEST_FUNCTION(name, ...)                \
+  pw_tokenizer_ArgTypes pw_TestTokenizer##name(void) { \
+    (void)char_array;                                  \
+    return PW_TOKENIZER_ARG_TYPES(__VA_ARGS__);        \
   }
 
 DEFINE_TEST_FUNCTION(NoArgs);

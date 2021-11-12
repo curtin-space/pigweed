@@ -21,13 +21,17 @@
 #include <cstdint>
 #include <cstring>
 #include <new>
+#include <span>
 
 #include "pw_polyfill/standard.h"
 #include "pw_preprocessor/concat.h"
 #include "pw_preprocessor/util.h"
+#include "pw_unit_test/config.h"
 #include "pw_unit_test/event_handler.h"
 
 #if PW_CXX_STANDARD_IS_SUPPORTED(17)
+#include <string_view>
+
 #include "pw_string/string_builder.h"
 #endif  // PW_CXX_STANDARD_IS_SUPPORTED(17)
 
@@ -35,11 +39,10 @@
   _PW_TEST(test_suite_name, test_name, ::pw::unit_test::Test)
 
 // TEST() is a pretty generic macro name which could conflict with other code.
-// If PW_TEST_DONT_DEFINE_TEST is set, don't alias PW_TEST to TEST.
-// GTEST_DONT_DEFINE_TEST is also accepted for compatibility.
-#if !PW_TEST_DONT_DEFINE_TEST && !GTEST_DONT_DEFINE_TEST
+// If GTEST_DONT_DEFINE_TEST is set, don't alias PW_TEST to TEST.
+#if !(defined(GTEST_DONT_DEFINE_TEST) && GTEST_DONT_DEFINE_TEST)
 #define TEST PW_TEST
-#endif  // !PW_TEST_DONT_DEFINE_TEST && !GTEST_DONT_DEFINE_TEST
+#endif  // !GTEST_DONT_DEFINE_TEST
 
 #define TEST_F(test_fixture, test_name) \
   _PW_TEST(test_fixture, test_name, test_fixture)
@@ -75,18 +78,18 @@
 
 // Define either macro to 1 to omit the definition of FAIL(), which is a
 // generic name and clashes with some other libraries.
-#if !PW_TEST_DONT_DEFINE_FAIL && !GTEST_DONT_DEFINE_FAIL
+#if !(defined(GTEST_DONT_DEFINE_FAIL) && GTEST_DONT_DEFINE_FAIL)
 #define FAIL() GTEST_FAIL()
-#endif  // !PW_TEST_DONT_DEFINE_FAIL && !GTEST_DONT_DEFINE_FAIL
+#endif  // !GTEST_DONT_DEFINE_FAIL
 
 // Generates a success with a generic message.
 #define GTEST_SUCCEED() _PW_TEST_MESSAGE("(success)", "(success)", true)
 
 // Define either macro to 1 to omit the definition of SUCCEED(), which
 // is a generic name and clashes with some other libraries.
-#if !PW_TEST_DONT_DEFINE_SUCCEED && !GTEST_DONT_DEFINE_SUCCEED
+#if !(defined(GTEST_DONT_DEFINE_SUCCEED) && GTEST_DONT_DEFINE_SUCCEED)
 #define SUCCEED() GTEST_SUCCEED()
-#endif  // !PW_TEST_DONT_DEFINE_SUCCEED && !GTEST_DONT_DEFINE_SUCCEED
+#endif  // !GTEST_DONT_DEFINE_SUCCEED
 
 // pw_unit_test framework entry point. Runs every registered test case and
 // dispatches the results through the event handler. Returns a status of zero
@@ -115,11 +118,13 @@ namespace string {
 // ASSERT statements in tests.
 //
 // You can add support for displaying custom types by defining a ToString
-// overload. For example:
+// template specialization. For example:
 //
 //   namespace pw {
 //
-//   StatusWithSize ToString(const MyType& value, const span<char>& buffer) {
+//   template <>
+//   StatusWithSize ToString<MyType>(const MyType& value,
+//                                   std::span<char> buffer) {
 //     return string::Format("<MyType|%d>", value.id);
 //   }
 //
@@ -127,7 +132,7 @@ namespace string {
 //
 // See the documentation in pw_string/string_builder.h for more information.
 template <typename T>
-StatusWithSize UnknownTypeToString(const T& value, const span<char>& buffer) {
+StatusWithSize UnknownTypeToString(const T& value, std::span<char> buffer) {
   StringBuilder sb(buffer);
   sb << '<' << sizeof(value) << "-byte object at 0x" << &value << '>';
   return sb.status_with_size();
@@ -153,7 +158,10 @@ class Framework {
   constexpr Framework()
       : current_test_(nullptr),
         current_result_(TestResult::kSuccess),
-        run_tests_summary_{.passed_tests = 0, .failed_tests = 0},
+        run_tests_summary_{.passed_tests = 0,
+                           .failed_tests = 0,
+                           .skipped_tests = 0,
+                           .disabled_tests = 0},
         exit_status_(0),
         event_handler_(nullptr),
         memory_pool_() {}
@@ -175,6 +183,17 @@ class Framework {
   // are sent to the registered event handler, if any.
   int RunAllTests();
 
+#if PW_CXX_STANDARD_IS_SUPPORTED(17)
+  // Only run test suites whose names are included in the provided list during
+  // the next test run. This is C++17 only; older versions of C++ will run all
+  // non-disabled tests.
+  void SetTestSuitesToRun(std::span<std::string_view> test_suites) {
+    test_suites_to_run_ = test_suites;
+  }
+#endif  // PW_CXX_STANDARD_IS_SUPPORTED(17)
+
+  bool ShouldRunTest(const TestInfo& test_info);
+
   // Constructs an instance of a unit test class and runs the test.
   //
   // Tests are constructed within a static memory pool at run time instead of
@@ -194,6 +213,10 @@ class Framework {
 
     Framework& framework = Get();
     framework.StartTest(test_info);
+
+    // Reset the memory pool to a marker value to help detect use of
+    // uninitialized memory.
+    std::memset(&framework.memory_pool_, 0xa5, sizeof(framework.memory_pool_));
 
     // Construct the test object within the static memory pool. The StartTest
     // function has already been called by the TestInfo at this point.
@@ -274,10 +297,11 @@ class Framework {
   // Handler to which to dispatch test events.
   EventHandler* event_handler_;
 
-  // Memory region in which to construct test case classes as they are run.
-  // TODO(frolv): Make the memory pool size configurable.
-  static constexpr size_t kTestMemoryPoolSizeBytes = 16384;
-  std::aligned_storage_t<kTestMemoryPoolSizeBytes, alignof(std::max_align_t)>
+#if PW_CXX_STANDARD_IS_SUPPORTED(17)
+  std::span<std::string_view> test_suites_to_run_;
+#endif  // PW_CXX_STANDARD_IS_SUPPORTED(17)
+
+  std::aligned_storage_t<config::kMemoryPoolSize, alignof(std::max_align_t)>
       memory_pool_;
 };
 
@@ -370,6 +394,12 @@ class Test {
   virtual void PigweedTestBody() = 0;
 };
 
+#if PW_CXX_STANDARD_IS_SUPPORTED(17)
+inline void SetTestSuitesToRun(std::span<std::string_view> test_suites) {
+  internal::Framework::Get().SetTestSuitesToRun(test_suites);
+}
+#endif  // PW_CXX_STANDARD_IS_SUPPORTED(17)
+
 }  // namespace unit_test
 }  // namespace pw
 
@@ -419,11 +449,15 @@ class Test {
   ::pw::unit_test::internal::Framework::Get().ExpectationResult( \
       expected, actual, __LINE__, success)
 
-#define _PW_TEST_OP(expect_or_assert, lhs, rhs, op) \
-  expect_or_assert(                                 \
-      lhs, rhs, [](const auto& l, const auto& r) { return l op r; }, #op)
+#define _PW_TEST_OP(expect_or_assert, lhs, rhs, op)  \
+  expect_or_assert(                                  \
+      lhs,                                           \
+      rhs,                                           \
+      [](const auto& _pw_lhs, const auto& _pw_rhs) { \
+        return _pw_lhs op _pw_rhs;                   \
+      },                                             \
+      #op)
 
-// Implement boolean expectations in a C++11-compatible way.
 #define _PW_EXPECT_BOOL(expr, value)                             \
   ::pw::unit_test::internal::Framework::Get().CurrentTestExpect( \
       [](bool lhs, bool rhs) { return lhs == rhs; },             \
@@ -440,18 +474,22 @@ class Test {
     }                                    \
   } while (0)
 
-#define _PW_TEST_STREQ(expect_or_assert, lhs, rhs)                         \
-  expect_or_assert(                                                        \
-      lhs,                                                                 \
-      rhs,                                                                 \
-      [](const auto& l, const auto& r) { return std::strcmp(l, r) == 0; }, \
+#define _PW_TEST_STREQ(expect_or_assert, lhs, rhs)   \
+  expect_or_assert(                                  \
+      lhs,                                           \
+      rhs,                                           \
+      [](const auto& _pw_lhs, const auto& _pw_rhs) { \
+        return std::strcmp(_pw_lhs, _pw_rhs) == 0;   \
+      },                                             \
       "equals")
 
-#define _PW_TEST_STRNE(expect_or_assert, lhs, rhs)                         \
-  expect_or_assert(                                                        \
-      lhs,                                                                 \
-      rhs,                                                                 \
-      [](const auto& l, const auto& r) { return std::strcmp(l, r) != 0; }, \
+#define _PW_TEST_STRNE(expect_or_assert, lhs, rhs)   \
+  expect_or_assert(                                  \
+      lhs,                                           \
+      rhs,                                           \
+      [](const auto& _pw_lhs, const auto& _pw_rhs) { \
+        return std::strcmp(_pw_lhs, _pw_rhs) != 0;   \
+      },                                             \
       "does not equal")
 
 // Alias Test as ::testing::Test for Googletest compatibility.

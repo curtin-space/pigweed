@@ -37,6 +37,8 @@ pragma_once function for an example.
 See pigweed_presbumit.py for an example of how to define presubmit checks.
 """
 
+from __future__ import annotations
+
 import collections
 import contextlib
 import dataclasses
@@ -49,9 +51,10 @@ from pathlib import Path
 import re
 import subprocess
 import time
-from typing import Callable, Collection, Dict, Iterable, Iterator, List
-from typing import NamedTuple, Optional, Pattern, Sequence, Set, Tuple
+from typing import (Callable, Collection, Dict, Iterable, Iterator, List,
+                    NamedTuple, Optional, Pattern, Sequence, Set, Tuple, Union)
 
+import pw_cli.env
 from pw_presubmit import git_repo, tools
 from pw_presubmit.tools import plural
 
@@ -83,7 +86,10 @@ def _title(msg, style=_SUMMARY_BOX) -> str:
 
 def _format_time(time_s: float) -> str:
     minutes, seconds = divmod(time_s, 60)
-    return f' {int(minutes)}:{seconds:04.1f}'
+    if minutes < 60:
+        return f' {int(minutes)}:{seconds:04.1f}'
+    hours, minutes = divmod(minutes, 60)
+    return f'{int(hours):d}:{int(minutes):02}:{int(seconds):02}'
 
 
 def _box(style, left, middle, right, box=tools.make_box('><>')) -> str:
@@ -126,7 +132,7 @@ class Program(collections.abc.Sequence):
     """A sequence of presubmit checks; basically a tuple with a name."""
     def __init__(self, name: str, steps: Iterable[Callable]):
         self.name = name
-        self._steps = tuple(tools.flatten(steps))
+        self._steps = tuple({s: None for s in tools.flatten(steps)})
 
     def __getitem__(self, i):
         return self._steps[i]
@@ -177,10 +183,19 @@ class PresubmitContext:
     repos: Tuple[Path, ...]
     output_dir: Path
     paths: Tuple[Path, ...]
+    package_root: Path
 
-    def relative_paths(self, start: Optional[Path] = None):
+    def relative_paths(self, start: Optional[Path] = None) -> Tuple[Path, ...]:
         return tuple(
             tools.relative_paths(self.paths, start if start else self.root))
+
+    def paths_by_repo(self) -> Dict[Path, List[Path]]:
+        repos = collections.defaultdict(list)
+
+        for path in self.paths:
+            repos[git_repo.root(path)].append(path)
+
+        return repos
 
 
 class _Filter(NamedTuple):
@@ -192,37 +207,42 @@ class _Filter(NamedTuple):
                 and not any(exp.search(path) for exp in self.exclude))
 
 
+def _print_ui(*args) -> None:
+    """Prints to stdout and flushes to stay in sync with logs on stderr."""
+    print(*args, flush=True)
+
+
 class Presubmit:
     """Runs a series of presubmit checks on a list of files."""
     def __init__(self, root: Path, repos: Sequence[Path],
-                 output_directory: Path, paths: Sequence[Path]):
+                 output_directory: Path, paths: Sequence[Path],
+                 package_root: Path):
         self._root = root.resolve()
         self._repos = tuple(repos)
         self._output_directory = output_directory.resolve()
         self._paths = tuple(paths)
         self._relative_paths = tuple(
             tools.relative_paths(self._paths, self._root))
+        self._package_root = package_root.resolve()
 
     def run(self, program: Program, keep_going: bool = False) -> bool:
         """Executes a series of presubmit checks on the paths."""
 
-        checks = self._apply_filters(program)
+        checks = self.apply_filters(program)
 
         _LOG.debug('Running %s for %s', program.title(), self._root.name)
-        print(_title(f'{self._root.name}: {program.title()}'))
+        _print_ui(_title(f'{self._root.name}: {program.title()}'))
 
         _LOG.info('%d of %d checks apply to %s in %s', len(checks),
                   len(program), plural(self._paths, 'file'), self._root)
 
-        print()
+        _print_ui()
         for line in tools.file_summary(self._relative_paths):
-            print(line)
-        print()
+            _print_ui(line)
+        _print_ui()
 
-        _LOG.debug('Paths, relative to %s:\n%s', self._root,
-                   '\n'.join(p.as_posix() for p in self._relative_paths))
         if not self._paths:
-            print(color_yellow('No files are being checked!'))
+            _print_ui(color_yellow('No files are being checked!'))
 
         _LOG.debug('Checks:\n%s', '\n'.join(c.name for c, _ in checks))
 
@@ -232,13 +252,13 @@ class Presubmit:
 
         return not failed and not skipped
 
-    def _apply_filters(
-            self, program: Sequence[Callable]
-    ) -> List[Tuple['_Check', Sequence[Path]]]:
+    def apply_filters(
+            self,
+            program: Sequence[Callable]) -> List[Tuple[Check, Sequence[Path]]]:
         """Returns list of (check, paths) for checks that should run."""
-        checks = [c if isinstance(c, _Check) else _Check(c) for c in program]
+        checks = [c if isinstance(c, Check) else Check(c) for c in program]
         filter_to_checks: Dict[_Filter,
-                               List[_Check]] = collections.defaultdict(list)
+                               List[Check]] = collections.defaultdict(list)
 
         for check in checks:
             filter_to_checks[check.filter].append(check)
@@ -247,9 +267,9 @@ class Presubmit:
         return [(c, check_to_paths[c]) for c in checks if c in check_to_paths]
 
     def _map_checks_to_paths(
-        self, filter_to_checks: Dict[_Filter, List['_Check']]
-    ) -> Dict['_Check', Sequence[Path]]:
-        checks_to_paths: Dict[_Check, Sequence[Path]] = {}
+        self, filter_to_checks: Dict[_Filter, List[Check]]
+    ) -> Dict[Check, Sequence[Path]]:
+        checks_to_paths: Dict[Check, Sequence[Path]] = {}
 
         posix_paths = tuple(p.as_posix() for p in self._relative_paths)
 
@@ -284,7 +304,7 @@ class Presubmit:
                    plural(self._paths, 'file'), time_s)
         _LOG.debug('Presubmit checks %s: %s', result.value, summary)
 
-        print(
+        _print_ui(
             _box(
                 _SUMMARY_BOX, result.colorized(_LEFT, invert=True),
                 f'{total} checks on {plural(self._paths, "file")}: {summary}',
@@ -311,6 +331,7 @@ class Presubmit:
                 repos=self._repos,
                 output_dir=output_directory,
                 paths=paths,
+                package_root=self._package_root,
             )
 
         finally:
@@ -375,6 +396,8 @@ def run(program: Sequence[Callable],
         paths: Sequence[str] = (),
         exclude: Sequence[Pattern] = (),
         output_directory: Optional[Path] = None,
+        package_root: Path = None,
+        only_list_steps: bool = False,
         keep_going: bool = False) -> bool:
     """Lists files in the current Git repo and runs a Presubmit with them.
 
@@ -397,6 +420,8 @@ def run(program: Sequence[Callable],
         paths: optional list of Git pathspecs to run the checks against
         exclude: regular expressions for Posix-style paths to exclude
         output_directory: where to place output files
+        package_root: where to place package files
+        only_list_steps: print step names instead of running them
         keep_going: whether to continue running checks if an error occurs
 
     Returns:
@@ -424,7 +449,21 @@ def run(program: Sequence[Callable],
     if output_directory is None:
         output_directory = root / '.presubmit'
 
-    presubmit = Presubmit(root, repos, output_directory, files)
+    if package_root is None:
+        package_root = output_directory / 'packages'
+
+    presubmit = Presubmit(
+        root=root,
+        repos=repos,
+        output_directory=output_directory,
+        paths=files,
+        package_root=package_root,
+    )
+
+    if only_list_steps:
+        for check, _ in presubmit.apply_filters(program):
+            print(check.name)
+        return True
 
     if not isinstance(program, Program):
         program = Program('', program)
@@ -432,7 +471,11 @@ def run(program: Sequence[Callable],
     return presubmit.run(program, keep_going)
 
 
-class _Check:
+def _make_str_tuple(value: Union[Iterable[str], str]) -> Tuple[str, ...]:
+    return tuple([value] if isinstance(value, str) else value)
+
+
+class Check:
     """Wraps a presubmit check function.
 
     This class consolidates the logic for running and logging a presubmit check.
@@ -448,8 +491,22 @@ class _Check:
         self.filter: _Filter = path_filter
         self.always_run: bool = always_run
 
-        # Since _Check wraps a presubmit function, adopt that function's name.
+        # Since Check wraps a presubmit function, adopt that function's name.
         self.__name__ = self._check.__name__
+
+    def with_filter(
+        self,
+        *,
+        endswith: Iterable[str] = '',
+        exclude: Iterable[Union[Pattern[str], str]] = ()
+    ) -> Check:
+        return Check(check_function=self._check,
+                     path_filter=_Filter(endswith=self.filter.endswith +
+                                         _make_str_tuple(endswith),
+                                         exclude=self.filter.exclude +
+                                         tuple(re.compile(e)
+                                               for e in exclude)),
+                     always_run=self.always_run)
 
     @property
     def name(self):
@@ -458,7 +515,7 @@ class _Check:
     def run(self, ctx: PresubmitContext, count: int, total: int) -> _Result:
         """Runs the presubmit check on the provided paths."""
 
-        print(
+        _print_ui(
             _box(_CHECK_UPPER, f'{count}/{total}', self.name,
                  plural(ctx.paths, "file")))
 
@@ -470,7 +527,8 @@ class _Check:
         time_str = _format_time(time.time() - start_time_s)
         _LOG.debug('%s %s', self.name, result.value)
 
-        print(_box(_CHECK_LOWER, result.colorized(_LEFT), self.name, time_str))
+        _print_ui(
+            _box(_CHECK_LOWER, result.colorized(_LEFT), self.name, time_str))
         _LOG.debug('%s duration:%s', self.name, time_str)
 
         return result
@@ -486,17 +544,17 @@ class _Check:
             _LOG.exception('Presubmit check %s failed!', self.name)
             return _Result.FAIL
         except KeyboardInterrupt:
-            print()
+            _print_ui()
             return _Result.CANCEL
 
         return _Result.PASS
 
     def __call__(self, ctx: PresubmitContext, *args, **kwargs):
-        """Calling a _Check calls its underlying function directly.
+        """Calling a Check calls its underlying function directly.
 
-      This makes it possible to call functions wrapped by @filter_paths. The
-      prior filters are ignored, so new filters may be applied.
-      """
+        This makes it possible to call functions wrapped by @filter_paths. The
+        prior filters are ignored, so new filters may be applied.
+        """
         return self._check(ctx, *args, **kwargs)
 
 
@@ -526,13 +584,9 @@ def _ensure_is_valid_presubmit_check_function(check: Callable) -> None:
              if required_args else ''))
 
 
-def _make_str_tuple(value: Iterable[str]) -> Tuple[str, ...]:
-    return tuple([value] if isinstance(value, str) else value)
-
-
-def filter_paths(endswith: Iterable[str] = (''),
-                 exclude: Iterable[str] = (),
-                 always_run: bool = False) -> Callable[[Callable], _Check]:
+def filter_paths(endswith: Iterable[str] = '',
+                 exclude: Iterable[Union[Pattern[str], str]] = (),
+                 always_run: bool = False) -> Callable[[Callable], Check]:
     """Decorator for filtering the paths list for a presubmit check function.
 
     Path filters only apply when the function is used as a presubmit check.
@@ -548,25 +602,20 @@ def filter_paths(endswith: Iterable[str] = (''),
         a wrapped version of the presubmit function
     """
     def filter_paths_for_function(function: Callable):
-        return _Check(function,
-                      _Filter(_make_str_tuple(endswith),
-                              tuple(re.compile(e) for e in exclude)),
-                      always_run=always_run)
+        return Check(function,
+                     _Filter(_make_str_tuple(endswith),
+                             tuple(re.compile(e) for e in exclude)),
+                     always_run=always_run)
 
     return filter_paths_for_function
 
 
-@filter_paths(endswith='.h')
-def pragma_once(ctx: PresubmitContext) -> None:
-    """Presubmit check that ensures all header files contain '#pragma once'."""
-
-    for path in ctx.paths:
-        with open(path) as file:
-            for line in file:
-                if line.startswith('#pragma once'):
-                    break
-            else:
-                raise PresubmitFailure('#pragma once is missing!', path=path)
+# TODO(mohrr) Remove after updating downstream projects to use cpp_checks.
+@filter_paths(endswith=('.h'))
+def pragma_once(ctx: PresubmitContext):
+    # pylint: disable=import-outside-toplevel
+    from pw_presubmit import cpp_checks
+    return cpp_checks.pragma_once(ctx)
 
 
 def call(*args, **kwargs) -> None:
@@ -574,19 +623,36 @@ def call(*args, **kwargs) -> None:
     attributes, command = tools.format_command(args, kwargs)
     _LOG.debug('[RUN] %s\n%s', attributes, command)
 
-    process = subprocess.run(args,
-                             stdout=subprocess.PIPE,
-                             stderr=subprocess.STDOUT,
-                             **kwargs)
-    logfunc = _LOG.warning if process.returncode else _LOG.debug
+    env = pw_cli.env.pigweed_environment()
+    kwargs['stdout'] = subprocess.PIPE
+    kwargs['stderr'] = subprocess.STDOUT
 
+    process = subprocess.Popen(args, **kwargs)
+    assert process.stdout
+
+    if env.PW_PRESUBMIT_DISABLE_SUBPROCESS_CAPTURE:
+        while True:
+            line = process.stdout.readline().decode(errors='backslashreplace')
+            if not line:
+                break
+            _LOG.info(line.rstrip())
+
+    stdout, _ = process.communicate()
+
+    logfunc = _LOG.warning if process.returncode else _LOG.debug
     logfunc('[FINISHED]\n%s', command)
     logfunc('[RESULT] %s with return code %d',
             'Failed' if process.returncode else 'Passed', process.returncode)
-
-    output = process.stdout.decode(errors='backslashreplace')
-    if output:
-        logfunc('[OUTPUT]\n%s', output)
+    if stdout:
+        logfunc('[OUTPUT]\n%s', stdout.decode(errors='backslashreplace'))
 
     if process.returncode:
         raise PresubmitFailure
+
+
+# TODO(mohrr) Remove after updating downstream projects to use build.bazel_lint.
+@filter_paths(endswith=('.bzl', '.bazel'))
+def bazel_lint(ctx: PresubmitContext):
+    # pylint: disable=import-outside-toplevel
+    from pw_presubmit import build
+    return build.bazel_lint(ctx)

@@ -1,12 +1,8 @@
-.. _chapter-style:
+.. _docs-pw-style:
 
-.. default-domain:: cpp
-
-.. highlight:: sh
-
-===========================
-Style Guide and Conventions
-===========================
+===========
+Style Guide
+===========
 
 .. tip::
   Pigweed runs ``pw format`` as part of ``pw presubmit`` to perform some code
@@ -17,7 +13,6 @@ Style Guide and Conventions
 ---------
 C++ style
 ---------
-
 The Pigweed C++ style guide is closely based on Google's external C++ Style
 Guide, which is found on the web at
 https://google.github.io/styleguide/cppguide.html. The Google C++ Style Guide
@@ -31,6 +26,20 @@ memory allocation and the entirety of the C++ Standard Library.
 Recommendations in the :doc:`embedded_cpp_guide` are considered part of the
 Pigweed style guide, but are separated out since it covers more general
 embedded development beyond just C++ style.
+
+C++ standard
+============
+Pigweed primarily uses the C++17 standard. A few modules maintain support for
+C++14, however (e.g. :ref:`module-pw_kvs` and its dependencies).
+
+All Pigweed C++ code must compile with ``-std=C++17`` in Clang and GCC. C++20
+features may be used as long as the code still compiles unmodified with C++17.
+See ``pw_polyfill/language_feature_macros.h`` for macros that provide C++20
+features when supported.
+
+Compiler extensions should not be used unless wrapped in a macro or properly
+guarded in the preprocessor. See ``pw_processor/compiler.h`` for macros that
+wrap compiler-specific features.
 
 Automatic formatting
 ====================
@@ -167,7 +176,7 @@ C functions with no parameters must include ``void``.
 
 Comments
 ========
-Prefer C++-style (``//``) comments over C-style commments (``/* */``). C-style
+Prefer C++-style (``//``) comments over C-style comments (``/* */``). C-style
 comments should only be used for inline comments.
 
 .. code-block:: cpp
@@ -197,7 +206,7 @@ Control statements
 ==================
 All loops and conditional statements must use braces.
 
-The syntax ``while (true)`` if preferred over ``for (;;)`` for infinite loops.
+The syntax ``while (true)`` is preferred over ``for (;;)`` for infinite loops.
 
 Include guards
 ==============
@@ -254,43 +263,53 @@ additional requirements.
   * If private code must be exposed in a header file, it must be in a namespace
     nested under ``pw``. The namespace may be named for its subsystem or use a
     name that designates it as private, such as ``internal``.
-  * Template arguments for non-type names (e.g. ``template <int foo_bar>``)
-    should follow the variable naming convention, which means snake case (e.g.
-    ``foo_bar``). This matches the Google C++ style, however the wording in the
-    official style guide isn't explicit and could be interpreted to use
-    ``kFooBar`` style naming. Wide practice establishes that the naming
-    convention is ``snake_case``, and so that is the style we use in Pigweed.
-
-    **Note:** At time of writing much of Pigweed incorrectly follows the
-    ``kCamelCase`` naming for non-type template arguments. This is a bug that
-    will be fixed eventually.
+  * Template arguments for non-type names (e.g. ``template <int kFooBar>``)
+    should follow the constexpr and const variable Google naming convention,
+    which means k prefixed camel case (e.g.
+    ``kCamelCase``). This matches the Google C++ style for variable naming,
+    however the wording in the official style guide isn't explicit for template
+    arguments and could be interpreted to use ``foo_bar`` style naming.
+    For consistency with other variables whose value is always fixed for the
+    duration of the program, the naming convention is ``kCamelCase``, and so
+    that is the style we use in Pigweed.
 
 **C code**
-  * Public names used by C code must be prefixed with ``pw_``.
+In general, C symbols should be prefixed with the module name. If the symbol is
+not associated with a module, use just ``pw`` as the module name. Facade
+backends may chose to prefix symbols with the facade's name to help reduce the
+length of the prefix.
+
+  * Public names used by C code must be prefixed with the module name (e.g.
+    ``pw_tokenizer_*``).
   * If private code must be exposed in a header, private names used by C code
-    must be prefixed with ``_pw_``.
+    must be prefixed with an underscore followed by the module name (e.g.
+    ``_pw_assert_*``).
   * Avoid writing C source (.c) files in Pigweed. Prefer to write C++ code with
     C linkage using ``extern "C"``. Within C source, private C functions and
-    variables must be named with the ``_pw_`` prefix and should be declared
-    ``static`` whenever possible; for example, ``_pw__MyPrivateFunction``.
+    variables must be named with the ``_pw_my_module_*`` prefix and should be
+    declared ``static`` whenever possible; for example,
+    ``_pw_my_module_MyPrivateFunction``.
   * The C prefix rules apply to
 
-    * C functions (``int pw_FunctionName(void);``),
-    * variables used by C code (``int pw_variable_name;``),
-    * constant variables used by C code (``int pw_kConstantName;``), and
-    * structs used by C code (``typedef struct {} pw_StructName;``).
+    * C functions (``int pw_foo_FunctionName(void);``),
+    * variables used by C code (``int pw_foo_variable_name;``),
+    * constant variables used by C code (``int pw_foo_kConstantName;``),
+    * structs used by C code (``typedef struct {} pw_foo_StructName;``), and
+    * all of the above for ``extern "C"`` names in C++ code.
 
     The prefix does not apply to struct members, which use normal Google style.
 
 **Preprocessor macros**
-  * Public Pigweed macros must be prefixed with ``PW_``.
-  * Private Pigweed macros must be prefixed with ``_PW_``.
+  * Public Pigweed macros must be prefixed with the module name (e.g.
+    ``PW_MY_MODULE_*``).
+  * Private Pigweed macros must be prefixed with an underscore followed by the
+    module name (e.g. ``_PW_MY_MODULE_*``).
 
 **Example**
 
 .. code-block:: cpp
 
-  namespace pw {
+  namespace pw::my_module {
   namespace nested_namespace {
 
   // C++ names (types, variables, functions) must be in the pw namespace.
@@ -307,37 +326,37 @@ additional requirements.
   extern "C" {
 
   // Public Pigweed code used from C must be prefixed with pw_.
-  extern const int pw_kGlobalConstant;
+  extern const int pw_my_module_kGlobalConstant;
 
-  extern int pw_global_variable;
+  extern int pw_my_module_global_variable;
 
-  void pw_Function(void);
+  void pw_my_module_Function(void);
 
   typedef struct {
     int member_variable;
-  } pw_Struct;
+  } pw_my_module_Struct;
 
   // Private Pigweed code used from C must be prefixed with _pw_.
-  extern const int _pw_kPrivateGlobalConstant;
+  extern const int _pw_my_module_kPrivateGlobalConstant;
 
-  extern int _pw_private_global_variable;
+  extern int _pw_my_module_private_global_variable;
 
-  void _pw_PrivateFunction(void);
+  void _pw_my_module_PrivateFunction(void);
 
   typedef struct {
     int member_variable;
-  } _pw_PrivateStruct;
+  } _pw_my_module_PrivateStruct;
 
   }  // extern "C"
 
   // Public macros must be prefixed with PW_.
-  #define PW_PUBLIC_MACRO(arg) arg
+  #define PW_MY_MODULE_PUBLIC_MACRO(arg) arg
 
   // Private macros must be prefixed with _PW_.
-  #define _PW_PRIVATE_MACRO(arg) arg
+  #define _PW_MY_MODULE_PRIVATE_MACRO(arg) arg
 
   }  // namespace nested_namespace
-  }  // namespace pw
+  }  // namespace pw::my_module
 
 Namespace scope formatting
 ==========================
@@ -397,9 +416,7 @@ type.
 
 Prefer storing references over storing pointers. Pointers are required when the
 pointer can change its target or may be ``nullptr``. Otherwise, a reference or
-const reference should be used. In accordance with the Google C++ style guide,
-only const references are permitted as function arguments; pointers must be used
-in place of mutable references when passed as function arguments.
+const reference should be used.
 
 Preprocessor macros
 ===================
@@ -542,11 +559,11 @@ Build files: GN
 
 Each Pigweed source module will require a build file named BUILD.gn which
 encapsulates the build targets and specifies their sources and dependencies.
-The format of this file is simlar in structure to the
+The format of this file is similar in structure to the
 `Bazel/Blaze format <https://docs.bazel.build/versions/3.2.0/build-ref.html>`_
-(Googlers may also review `go/build-style <go/build-style>`_), but with
+(Googlers may also review `go/build-style <http://go/build-style>`_), but with
 nomenclature specific to Pigweed. For each target specified within the build
-file there are a list of depdency fields. Those fields, in their expected
+file there are a list of dependency fields. Those fields, in their expected
 order, are:
 
   * ``<public_config>`` -- external build configuration
@@ -570,10 +587,7 @@ Assets within each field must be listed in alphabetical order
 
   source_set("pw_sample_module") {
     public_configs = [ ":default_config" ]
-    public_deps = [
-      dir_pw_span,
-      dir_pw_status,
-    ]
+    public_deps = [ dir_pw_status ]
     public = [ "public/pw_sample_module/sample_module.h" ]
     sources = [
       "public/pw_sample_module/internal/sample_module.h",
@@ -595,3 +609,143 @@ Assets within each field must be listed in alphabetical order
   pw_doc_group("docs") {
     sources = [ "docs.rst" ]
   }
+
+------------------
+Build files: Bazel
+------------------
+
+Similar to their BUILD.gn counterparts, build files for the Bazel build system
+must be named BUILD.bazel. Bazel can interpret files named just BUILD, but we
+use BUILD.bazel to avoid any ambiguity with other build systems or tooling.
+
+-------------
+Documentation
+-------------
+.. note::
+
+  Pigweed's documentation style guide came after much of the documentation was
+  written, so Pigweed's docs don't yet 100% conform to this style guide. When
+  updating docs, please update them to match the style guide.
+
+Pigweed documentation is written using the `reStructuredText
+<https://docutils.sourceforge.io/rst.html>`_ markup language and processed by
+`Sphinx`_. We use the `Furo theme <https://github.com/pradyunsg/furo>`_ along
+with the `sphinx-design <https://sphinx-design.readthedocs.io/en/furo-theme/>`_
+extension.
+
+.. _Sphinx: https://www.sphinx-doc.org/
+
+.. inclusive-language: disable
+
+.. _reStructuredText Primer: https://www.sphinx-doc.org/en/master/usage/restructuredtext/basics.html
+
+.. inclusive-language: enable
+
+.. admonition:: Doc Writing Reference Links
+   :class: seealso
+
+   - `reStructuredText Primer`_
+
+   - `reStructuredText Directives <https://docutils.sourceforge.io/docs/ref/rst/directives.html>`_
+
+   - `Furo Reference <https://pradyunsg.me/furo/reference/>`_
+
+   - `Sphinx-design Reference <https://sphinx-design.readthedocs.io/en/furo-theme/>`_
+
+ReST is flexible, supporting formatting the same logical document in a few ways
+(for example headings, blank lines). Pigweed has the following restrictions to
+make our documentation consistent.
+
+Headings
+========
+Use headings according to the following hierarchy, with the shown characters
+for the ReST heading syntax.
+
+.. code:: rst
+
+   ==================================
+   Document Title: Two Bars of Equals
+   ==================================
+   Document titles use equals ("====="), above and below. Capitalize the words
+   in the title, except for 'of' and 'the'.
+
+   ---------------------------
+   Major Sections Within a Doc
+   ---------------------------
+   Major sections use hypens ("----"), above and below. Capitalize the words in
+   the title, except for 'of' and 'the'.
+
+   Heading 1 - For Sections Within a Doc
+   =====================================
+   These should be title cased. Use a single equals bar ("====").
+
+   Heading 2 - for subsections
+   ---------------------------
+   Subsections use hypens ("----"). In many cases, these headings may be
+   sentence-like. In those cases, only the first letter should be capitalized.
+   For example, FAQ subsections would have a title with "Why does the X do the
+   Y?"; note the sentence capitalization (but not title capitalization).
+
+   Heading 3 - for subsubsections
+   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   Use the caret symbol ("^^^^") for subsubsections.
+
+   Note: Generally don't go beyond heading 3.
+
+   Heading 4 - for subsubsubsections
+   .................................
+   Don't use this heading level, but if you must, use period characters
+   ("....") for the heading.
+
+Do not put blank lines after the headings.
+
+**Yes**: No blank after heading
+
+.. code:: rst
+
+   Here is a heading
+   -----------------
+   Note that there is no blank line after the heading separator!
+
+**No**: Unnecessary blank line
+
+.. code:: rst
+
+   Here is a heading
+   -----------------
+
+   There is a totally unnecessary blank line above this one. Don't do this.
+
+Do not put multiple blank lines before a heading.
+
+**Yes**: Just one blank after section content before the next heading
+
+.. code:: rst
+
+   There is some text here in the section before the next. It's just here to
+   illustrate the spacing standard. Note that there is just one blank line
+   after this paragraph.
+
+   Just one blank!
+   ---------------
+   There is just one blank line before the heading.
+
+**No**: Extra blank lines
+
+.. code:: rst
+
+   There is some text here in the section before the next. It's just here to
+   illustrate the spacing standard. Note that there are too many blank lines
+   after this paragraph; there should be just one.
+
+
+
+   Too many blanks
+   ---------------
+   There are too many blanks before the heading for this section.
+
+Tables
+======
+Consider using ``.. list-table::`` syntax, which is more maintainable and
+easier to edit for complex tables (`details
+<https://docutils.sourceforge.io/docs/ref/rst/directives.html#list-table>`_).

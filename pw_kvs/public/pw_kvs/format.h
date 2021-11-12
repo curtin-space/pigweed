@@ -14,11 +14,12 @@
 #pragma once
 
 #include <cstdint>
+#include <span>
 
 #include "pw_kvs/checksum.h"
-#include "pw_span/span.h"
 
-namespace pw::kvs {
+namespace pw {
+namespace kvs {
 
 struct EntryFormat;
 
@@ -26,6 +27,9 @@ namespace internal {
 
 // Disk format of the header used for each key-value entry.
 struct EntryHeader {
+  // For KVS magic value always use a random 32 bit integer rather than a
+  // human readable 4 bytes. See pw_kvs/format.h::EntryFormat for more
+  // information.
   uint32_t magic;
 
   // The checksum of the entire entry, including the header, key, value, and
@@ -56,7 +60,7 @@ static_assert(sizeof(EntryHeader) == 16, "EntryHeader must not have padding");
 // simultaneously supported formats.
 class EntryFormats {
  public:
-  explicit constexpr EntryFormats(span<const EntryFormat> formats)
+  explicit constexpr EntryFormats(std::span<const EntryFormat> formats)
       : formats_(formats) {}
 
   explicit constexpr EntryFormats(const EntryFormat& format)
@@ -69,7 +73,7 @@ class EntryFormats {
   const EntryFormat* Find(uint32_t magic) const;
 
  private:
-  const span<const EntryFormat> formats_;
+  const std::span<const EntryFormat> formats_;
 };
 
 }  // namespace internal
@@ -101,4 +105,5 @@ struct EntryFormat {
   ChecksumAlgorithm* checksum;
 };
 
-}  // namespace pw::kvs
+}  // namespace kvs
+}  // namespace pw

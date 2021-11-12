@@ -12,67 +12,38 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
-import("python_script.gni")
+import("python_action.gni")
 
-declare_args() {
-  # Whether to build host-side tooling.
-  pw_build_HOST_TOOLS = false
-}
+# Defines a Pigweed host tool and installs it into the host_tools directory.
+#
+# Args:
+#   tool: The target that outputs the binary tool.
+#   name: Optional name for the installed program. Defaults to the name of
+#     the compiled binary.
+template("pw_host_tool") {
+  assert(defined(invoker.tool),
+         "pw_host_tool must specify an executable as the tool variable")
 
-if (pw_build_HOST_TOOLS) {
-  # Defines a Pigweed host tool and installs it into the host_tools directory.
-  #
-  # Args:
-  #   deps: List containing exactly one target which outputs a binary tool.
-  #   name: Optional name for the installed program. Defaults to the name of
-  #     the compiled binary.
-  template("pw_host_tool") {
-    assert(defined(invoker.deps),
-           "pw_host_tool must specify an executable as a dependency")
+  _script_args = [
+    "--src",
+    "<TARGET_FILE(${invoker.tool})>",
+    "--dst",
+    rebase_path("$root_out_dir/host_tools", root_build_dir),
+    "--out-root",
+    rebase_path(root_out_dir, root_build_dir),
+  ]
 
-    num_deps = 0
-    foreach(_dep, invoker.deps) {
-      num_deps += 1
-    }
-    assert(num_deps == 1, "pw_host_tool must have exactly one dependency")
-
-    _host_tools_dir = "$root_out_dir/host_tools"
-
-    # Can't do invoker.deps[0] in GN.
-    _deps = invoker.deps
-    _out_target = get_label_info(_deps[0], "target_out_dir") + ":" +
-                  get_label_info(_deps[0], "name")
-
-    _script_args = [
-      "--src",
-      _out_target,
-      "--dst",
-      _host_tools_dir,
-      "--out-root",
-      root_out_dir,
+  if (defined(invoker.name) && invoker.name != "") {
+    _script_args += [
+      "--name",
+      invoker.name,
     ]
-
-    if (defined(invoker.name) && invoker.name != "") {
-      _script_args += [
-        "--name",
-        invoker.name,
-      ]
-    }
-
-    pw_python_script(target_name) {
-      script = "$dir_pw_build/py/host_tool.py"
-      args = _script_args
-      deps = _deps
-      stamp = true
-    }
   }
-} else {
-  # For builds without host tools, create an empty target.
-  template("pw_host_tool") {
-    not_needed("*")
-    not_needed(invoker, "*")
 
-    group(target_name) {
-    }
+  pw_python_action(target_name) {
+    script = "$dir_pw_build/py/pw_build/host_tool.py"
+    args = _script_args
+    deps = [ invoker.tool ]
+    stamp = true
   }
-}  # pw_build_HOST_TOOLS
+}

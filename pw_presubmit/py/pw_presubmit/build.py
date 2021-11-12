@@ -14,51 +14,157 @@
 """Functions for building code during presubmit checks."""
 
 import collections
+import contextlib
+import itertools
+import json
 import logging
 import os
 from pathlib import Path
 import re
-from typing import Container, Dict, Iterable, List, Mapping, Set, Tuple
+import subprocess
+from shutil import which
+from typing import (Collection, Container, Dict, Iterable, List, Mapping, Set,
+                    Tuple, Union)
 
-from pw_presubmit import call, log_run, plural, PresubmitFailure, tools
+from pw_package import package_manager
+from pw_presubmit import (
+    call,
+    Check,
+    filter_paths,
+    log_run,
+    plural,
+    PresubmitContext,
+    PresubmitFailure,
+    tools,
+)
 
 _LOG = logging.getLogger(__name__)
 
 
+def install_package(root: Path, name: str) -> None:
+    """Install package with given name in given path."""
+    mgr = package_manager.PackageManager(root)
+
+    if not mgr.list():
+        raise PresubmitFailure(
+            'no packages configured, please import your pw_package '
+            'configuration module')
+
+    if not mgr.status(name):
+        mgr.install(name)
+
+
 def gn_args(**kwargs) -> str:
-    """Builds a string to use for the --args argument to gn gen."""
-    return '--args=' + ' '.join(f'{arg}={val}' for arg, val in kwargs.items())
+    """Builds a string to use for the --args argument to gn gen.
+
+    Currently supports bool, int, and str values. In the case of str values,
+    quotation marks will be added automatically, unless the string already
+    contains one or more double quotation marks, or starts with a { or [
+    character, in which case it will be passed through as-is.
+    """
+    transformed_args = []
+    for arg, val in kwargs.items():
+        if isinstance(val, bool):
+            transformed_args.append(f'{arg}={str(val).lower()}')
+            continue
+        if (isinstance(val, str) and '"' not in val and not val.startswith("{")
+                and not val.startswith("[")):
+            transformed_args.append(f'{arg}="{val}"')
+            continue
+        # Fall-back case handles integers as well as strings that already
+        # contain double quotation marks, or look like scopes or lists.
+        transformed_args.append(f'{arg}={val}')
+    # Use ccache if available for faster repeat presubmit runs.
+    if which('ccache'):
+        transformed_args.append('pw_command_launcher="ccache"')
+
+    return '--args=' + ' '.join(transformed_args)
 
 
 def gn_gen(gn_source_dir: Path,
            gn_output_dir: Path,
            *args: str,
            gn_check: bool = True,
+           gn_fail_on_unused: bool = True,
+           export_compile_commands: Union[bool, str] = True,
            **gn_arguments) -> None:
     """Runs gn gen in the specified directory with optional GN args."""
     args_option = (gn_args(**gn_arguments), ) if gn_arguments else ()
-    check_option = ['--check'] if gn_check else []
+
+    # Delete args.gn to ensure this is a clean build.
+    args_gn = gn_output_dir / 'args.gn'
+    if args_gn.is_file():
+        args_gn.unlink()
+
+    export_commands_arg = ''
+    if export_compile_commands:
+        export_commands_arg = '--export-compile-commands'
+        if isinstance(export_compile_commands, str):
+            export_commands_arg += f'={export_compile_commands}'
 
     call('gn',
          'gen',
          gn_output_dir,
          '--color=always',
-         *check_option,
+         *(['--fail-on-unused-args'] if gn_fail_on_unused else []),
+         *([export_commands_arg] if export_commands_arg else []),
          *args,
          *args_option,
          cwd=gn_source_dir)
 
+    if gn_check:
+        call('gn',
+             'check',
+             gn_output_dir,
+             '--check-generated',
+             '--check-system',
+             cwd=gn_source_dir)
 
-def ninja(directory: Path, *args, **kwargs) -> None:
+
+def ninja(directory: Path,
+          *args,
+          save_compdb=True,
+          save_graph=True,
+          **kwargs) -> None:
     """Runs ninja in the specified directory."""
+    if save_compdb:
+        proc = subprocess.run(
+            ['ninja', '-C', directory, '-t', 'compdb', *args],
+            capture_output=True,
+            **kwargs)
+        (directory / 'ninja.compdb').write_bytes(proc.stdout)
+
+    if save_graph:
+        proc = subprocess.run(['ninja', '-C', directory, '-t', 'graph', *args],
+                              capture_output=True,
+                              **kwargs)
+        (directory / 'ninja.graph').write_bytes(proc.stdout)
+
     call('ninja', '-C', directory, *args, **kwargs)
+    (directory / '.ninja_log').rename(directory / 'ninja.log')
+
+
+def get_gn_args(directory: Path) -> List[Dict[str, Dict[str, str]]]:
+    """Dumps GN variables to JSON."""
+    proc = subprocess.run(['gn', 'args', directory, '--list', '--json'],
+                          stdout=subprocess.PIPE)
+    return json.loads(proc.stdout)
 
 
 def cmake(source_dir: Path,
           output_dir: Path,
+          *args: str,
           env: Mapping['str', 'str'] = None) -> None:
     """Runs CMake for Ninja on the given source and output directories."""
-    call('cmake', '-B', output_dir, '-S', source_dir, '-G', 'Ninja', env=env)
+    call('cmake',
+         '-B',
+         output_dir,
+         '-S',
+         source_dir,
+         '-G',
+         'Ninja',
+         *args,
+         env=env)
 
 
 def env_with_clang_vars() -> Mapping[str, str]:
@@ -92,7 +198,15 @@ def _get_paths_from_command(source_dir: Path, *args, **kwargs) -> Set[Path]:
 
 
 # Finds string literals with '.' in them.
-_MAYBE_A_PATH = re.compile(r'"([^\n"]+\.[^\n"]+)"')
+_MAYBE_A_PATH = re.compile(
+    r'"'  # Starting double quote.
+    # Start capture group 1 - the whole filename:
+    #   File basename, a single period, file extension.
+    r'([^\n" ]+\.[^\n" ]+)'
+    # Non-capturing group 2 (optional).
+    r'(?: > [^\n"]+)?'  # pw_zip style string "input_file.txt > output_file.txt"
+    r'"'  # Ending double quote.
+)
 
 
 def _search_files_for_paths(build_files: Iterable[Path]) -> Iterable[Path]:
@@ -105,8 +219,41 @@ def _search_files_for_paths(build_files: Iterable[Path]) -> Iterable[Path]:
                 yield path
 
 
+def _read_compile_commands(compile_commands: Path) -> dict:
+    with compile_commands.open('rb') as fd:
+        return json.load(fd)
+
+
+def compiled_files(compile_commands: Path) -> Iterable[Path]:
+    for command in _read_compile_commands(compile_commands):
+        file = Path(command['file'])
+        if file.is_absolute():
+            yield file
+        else:
+            yield file.joinpath(command['directory']).resolve()
+
+
+def check_compile_commands_for_files(
+        compile_commands: Union[Path, Iterable[Path]],
+        files: Iterable[Path],
+        extensions: Collection[str] = ('.c', '.cc', '.cpp'),
+) -> List[Path]:
+    """Checks for paths in one or more compile_commands.json files.
+
+    Only checks C and C++ source files by default.
+    """
+    if isinstance(compile_commands, Path):
+        compile_commands = [compile_commands]
+
+    compiled = frozenset(
+        itertools.chain.from_iterable(
+            compiled_files(cmds) for cmds in compile_commands))
+    return [f for f in files if f not in compiled and f.suffix in extensions]
+
+
 def check_builds_for_files(
-        extensions_to_check: Container[str],
+        bazel_extensions_to_check: Container[str],
+        gn_extensions_to_check: Container[str],
         files: Iterable[Path],
         bazel_dirs: Iterable[Path] = (),
         gn_dirs: Iterable[Tuple[Path, Path]] = (),
@@ -115,7 +262,8 @@ def check_builds_for_files(
     """Checks that source files are in the GN and Bazel builds.
 
     Args:
-        extensions_to_check: which file suffixes to look for
+        bazel_extensions_to_check: which file suffixes to look for in Bazel
+        gn_extensions_to_check: which file suffixes to look for in GN
         files: the files that should be checked
         bazel_dirs: directories in which to run bazel query
         gn_dirs: (source_dir, output_dir) tuples with which to run gn desc
@@ -144,13 +292,18 @@ def check_builds_for_files(
 
     missing: Dict[str, List[Path]] = collections.defaultdict(list)
 
-    for path in (p for p in files if p.suffix in extensions_to_check):
-        if bazel_dirs and path.suffix != '.rst' and path not in bazel_builds:
-            # TODO(pwbug/176) Replace this workaround for fuzzers.
-            if 'fuzz' not in str(path):
-                missing['Bazel'].append(path)
-        if (gn_dirs or gn_build_files) and path not in gn_builds:
-            missing['GN'].append(path)
+    if bazel_dirs:
+        for path in (p for p in files
+                     if p.suffix in bazel_extensions_to_check):
+            if path not in bazel_builds:
+                # TODO(pwbug/176) Replace this workaround for fuzzers.
+                if 'fuzz' not in str(path):
+                    missing['Bazel'].append(path)
+
+    if gn_dirs or gn_build_files:
+        for path in (p for p in files if p.suffix in gn_extensions_to_check):
+            if path not in gn_builds:
+                missing['GN'].append(path)
 
     for builder, paths in missing.items():
         _LOG.warning('%s missing from the %s build:\n%s',
@@ -158,3 +311,52 @@ def check_builds_for_files(
                      '\n'.join(str(x) for x in paths))
 
     return missing
+
+
+@contextlib.contextmanager
+def test_server(executable: str, output_dir: Path):
+    """Context manager that runs a test server executable.
+
+    Args:
+        executable: name of the test server executable
+        output_dir: path to the output directory (for logs)
+    """
+
+    with open(output_dir / 'test_server.log', 'w') as outs:
+        try:
+            proc = subprocess.Popen(
+                [executable, '--verbose'],
+                stdout=outs,
+                stderr=subprocess.STDOUT,
+            )
+
+            yield
+
+        finally:
+            proc.terminate()
+
+
+@filter_paths(endswith=('.bzl', '.bazel'))
+def bazel_lint(ctx: PresubmitContext):
+    """Runs buildifier with lint on Bazel files.
+
+    Should be run after bazel_format since that will give more useful output
+    for formatting-only issues.
+    """
+
+    failure = False
+    for path in ctx.paths:
+        try:
+            call('buildifier', '--lint=warn', '--mode=check', path)
+        except PresubmitFailure:
+            failure = True
+
+    if failure:
+        raise PresubmitFailure
+
+
+@Check
+def gn_gen_check(ctx: PresubmitContext):
+    """Runs gn gen --check to enforce correct header dependencies."""
+    pw_project_root = Path(os.environ['PW_PROJECT_ROOT'])
+    gn_gen(pw_project_root, ctx.output_dir, gn_check=True)

@@ -1,3 +1,4 @@
 .cipd
 .presubmit
-pw_web_ui
+.environment
+environment

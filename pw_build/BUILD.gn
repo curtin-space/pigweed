@@ -1,4 +1,4 @@
-# Copyright 2019 The Pigweed Authors
+# Copyright 2020 The Pigweed Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not
 # use this file except in compliance with the License. You may obtain a copy of
@@ -12,10 +12,15 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
-# gn-format disable
 import("//build_overrides/pigweed.gni")
 
+import("$dir_pw_build/python.gni")
 import("$dir_pw_docgen/docs.gni")
+import("target_types.gni")
+
+# IMPORTANT: The compilation flags in this file must be kept in sync with
+#            the CMake flags pw_build/CMakeLists.txt.
+
 config("colorize_output") {
   cflags = [
     # Colorize output. Ninja's Clang invocation disables color by default.
@@ -70,6 +75,10 @@ config("strict_warnings") {
   cflags = [
     "-Wall",
     "-Wextra",
+    "-Wimplicit-fallthrough",
+    "-Wcast-qual",
+    "-Wundef",
+    "-Wpointer-arith",
 
     # Make all warnings errors, except for the exemptions below.
     "-Werror",
@@ -79,15 +88,21 @@ config("strict_warnings") {
   cflags_cc = [ "-Wnon-virtual-dtor" ]
 }
 
+# Thread safety warnings are only supported by Clang.
+config("clang_thread_safety_warnings") {
+  cflags = [ "-Wthread-safety" ]
+  defines = [ "_LIBCPP_ENABLE_THREAD_SAFETY_ANNOTATIONS=1" ]
+}
+
 # This config contains warnings that we don't necessarily recommend projects
 # enable, but are enabled for upstream Pigweed for maximum project
 # compatibility.
 config("extra_strict_warnings") {
-  cflags = [ "-Wshadow" ]
-}
-
-config("cpp11") {
-  cflags_cc = [ "-std=c++11" ]
+  cflags = [
+    "-Wshadow",
+    "-Wredundant-decls",
+  ]
+  cflags_c = [ "-Wstrict-prototypes" ]
 }
 
 config("cpp14") {
@@ -103,11 +118,65 @@ config("cpp17") {
   ]
 }
 
-pw_doc_group("docs") {
-  sources = [ "docs.rst" ]
+# Removes system-dependent prefixes from macros like __FILE__ and debug symbols.
+config("relative_paths") {
+  cflags = [
+    # Remap absolute paths to the build directory to "out", in case absolute
+    # paths to files in the build directory are created.
+    #
+    # Clang and GCC apply these flags in opposite order. The build directory is
+    # often nested under //. To ensure that both compilers removed it before
+    # removing the absolute path to //, apply the option both first and last.
+    "-ffile-prefix-map=" + rebase_path(root_build_dir) + "=out",
+
+    # Remove absolute paths to the repo root.
+    "-ffile-prefix-map=" + rebase_path("//") + "=",
+
+    # Remove relative paths from the build directory to the source tree.
+    "-ffile-prefix-map=" + rebase_path("//", root_build_dir) + "=",
+
+    # Repeat option to remap absolute paths to the build directory.
+    "-ffile-prefix-map=" + rebase_path(root_build_dir) + "=out",
+  ]
 }
 
-# Pool to limit a single thread to download external Go packages at a time.
-pool("go_download_pool") {
-  depth = 1
+# This group is linked into all pw_executable, pw_static_library, and
+# pw_shared_library targets. This makes it possible to ensure symbols are
+# defined without a dependency on them.
+#
+# pw_build_LINK_DEPS should only be used when necessary. For example,
+# pw_assert relies on pw_build_LINK_DEPS to avoid circular dependencies
+# in GN. In almost all other cases, build targets should explicitly depend on
+# the other targets they use.
+group("link_deps") {
+  deps = pw_build_LINK_DEPS
+}
+
+# This empty target is used as the default value for module configurations.
+# Projects may set pw_build_DEFAULT_MODULE_CONFIG to a different GN target that
+# overrides modules' configuration options via macro definitions or a header
+# forcibly included with `-include`.
+group("empty") {
+}
+
+# Requirements for the pw_python_package lint targets.
+pw_python_requirements("python_lint") {
+  requirements = [
+    "build",
+
+    # NOTE: mypy needs to stay in sync with mypy-protobuf
+    # Currently using mypy 0.910 and mypy-protobuf 2.9
+    "mypy==0.910",
+
+    # typeshed packages (required by mypy > 0.9)
+    "types-setuptools",
+    "pylint==2.9.3",
+  ]
+}
+
+pw_doc_group("docs") {
+  sources = [
+    "docs.rst",
+    "python.rst",
+  ]
 }

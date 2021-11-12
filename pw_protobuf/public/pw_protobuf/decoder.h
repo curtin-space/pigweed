@@ -13,10 +13,10 @@
 // the License.
 #pragma once
 
+#include <span>
 #include <string_view>
 
 #include "pw_protobuf/wire_format.h"
-#include "pw_span/span.h"
 #include "pw_status/status.h"
 #include "pw_varint/varint.h"
 
@@ -42,9 +42,10 @@
 //
 namespace pw::protobuf {
 
+// TODO(frolv): Rename this to MemoryDecoder to match the encoder naming.
 class Decoder {
  public:
-  constexpr Decoder(span<const std::byte> proto)
+  constexpr Decoder(std::span<const std::byte> proto)
       : proto_(proto), previous_field_consumed_(true) {}
 
   Decoder(const Decoder& other) = delete;
@@ -64,6 +65,12 @@ class Decoder {
   Status Next();
 
   // Returns the field number of the field at the current cursor position.
+  //
+  // A return value of 0 indicates that the field number is invalid. An invalid
+  // field number terminates the decode operation; any subsequent calls to
+  // Next() or Read*() will return DATA_LOSS.
+  //
+  // TODO(frolv): This should be refactored to return a Result<uint32_t>.
   uint32_t FieldNumber() const;
 
   // Reads a proto int32 value from the current cursor.
@@ -127,12 +134,14 @@ class Decoder {
   Status ReadString(std::string_view* out);
 
   // Reads a proto bytes value from the current cursor and returns a view of it
-  // in `out`. The raw protobuf data must outlive the `out` span. If the bytes
-  // field is invalid, `out` is not modified.
-  Status ReadBytes(span<const std::byte>* out) { return ReadDelimited(out); }
+  // in `out`. The raw protobuf data must outlive the `out` std::span. If the
+  // bytes field is invalid, `out` is not modified.
+  Status ReadBytes(std::span<const std::byte>* out) {
+    return ReadDelimited(out);
+  }
 
   // Resets the decoder to start reading a new proto message.
-  void Reset(span<const std::byte> proto) {
+  void Reset(std::span<const std::byte> proto) {
     proto_ = proto;
     previous_field_consumed_ = true;
   }
@@ -160,9 +169,9 @@ class Decoder {
     return ReadFixed(reinterpret_cast<std::byte*>(out), sizeof(T));
   }
 
-  Status ReadDelimited(span<const std::byte>* out);
+  Status ReadDelimited(std::span<const std::byte>* out);
 
-  span<const std::byte> proto_;
+  std::span<const std::byte> proto_;
   bool previous_field_consumed_;
 };
 
@@ -190,14 +199,14 @@ class DecodeHandler;
 //           break;
 //       }
 //
-//       return Status::OK;
+//       return OkStatus();
 //     }
 //
 //     int bar;
 //     unsigned int baz;
 //   };
 //
-//   void DecodeFooProto(span<std::byte> raw_proto) {
+//   void DecodeFooProto(std::span<std::byte> raw_proto) {
 //     Decoder decoder;
 //     FooProtoHandler handler;
 //
@@ -222,7 +231,7 @@ class CallbackDecoder {
 
   // Decodes the specified protobuf data. The registered handler's ProcessField
   // function is called on each field found in the data.
-  Status Decode(span<const std::byte> proto);
+  Status Decode(std::span<const std::byte> proto);
 
   // Reads a proto int32 value from the current cursor.
   Status ReadInt32(int32_t* out) { return decoder_.ReadInt32(out); }
@@ -269,9 +278,9 @@ class CallbackDecoder {
   Status ReadString(std::string_view* out) { return decoder_.ReadString(out); }
 
   // Reads a proto bytes value from the current cursor and returns a view of it
-  // in `out`. The raw protobuf data must outlive the `out` span. If the bytes
-  // field is invalid, `out` is not modified.
-  Status ReadBytes(span<const std::byte>* out) {
+  // in `out`. The raw protobuf data must outlive the `out` std::span. If the
+  // bytes field is invalid, `out` is not modified.
+  Status ReadBytes(std::span<const std::byte>* out) {
     return decoder_.ReadBytes(out);
   }
 
@@ -301,8 +310,8 @@ class DecodeHandler {
   // Receives a pointer to the decoder object, allowing the handler to call
   // the appropriate method to extract the field's data.
   //
-  // If the status returned is not Status::OK, the decode operation is exited
-  // with the provided status. Returning Status::CANCELLED allows a convenient
+  // If the status returned is not OkStatus(), the decode operation is exited
+  // with the provided status. Returning Status::Cancelled() allows a convenient
   // way of stopping a decode early (for example, if a desired field is found).
   virtual Status ProcessField(CallbackDecoder& decoder,
                               uint32_t field_number) = 0;

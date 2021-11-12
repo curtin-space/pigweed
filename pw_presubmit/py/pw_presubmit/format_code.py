@@ -28,6 +28,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import tempfile
 from typing import Callable, Collection, Dict, Iterable, List, NamedTuple
 from typing import Optional, Pattern, Tuple, Union
 
@@ -127,6 +128,26 @@ def check_gn_format(files: Iterable[Path]) -> Dict[Path, str]:
 def fix_gn_format(files: Iterable[Path]) -> None:
     """Fixes formatting for the provided files in place."""
     log_run(['gn', 'format', *files], check=True)
+
+
+def check_bazel_format(files: Iterable[Path]) -> Dict[Path, str]:
+    """Checks formatting; returns {path: diff} for files with bad formatting."""
+    def _format_temp(path: Union[Path, str], data: bytes) -> bytes:
+        # buildifier doesn't have an option to output the changed file, so
+        # copy the file to a temp location, run buildifier on it, read that
+        # modified copy, and return its contents.
+        with tempfile.TemporaryDirectory() as temp:
+            build = Path(temp) / os.path.basename(path)
+            build.write_bytes(data)
+            log_run(['buildifier', build], check=True)
+            return build.read_bytes()
+
+    return _check_files(files, _format_temp)
+
+
+def fix_bazel_format(files: Iterable[Path]) -> None:
+    """Fixes formatting for the provided files in place."""
+    log_run(['buildifier', *files], check=True)
 
 
 def check_go_format(files: Iterable[Path]) -> Dict[Path, str]:
@@ -237,6 +258,7 @@ def print_format_check(errors: Dict[Path, str],
 class CodeFormat(NamedTuple):
     language: str
     extensions: Collection[str]
+    exclude: Collection[str]
     check: Callable[[Iterable], Dict[Path, str]]
     fix: Callable[[Iterable], None]
 
@@ -244,38 +266,39 @@ class CodeFormat(NamedTuple):
 C_FORMAT: CodeFormat = CodeFormat(
     'C and C++',
     frozenset(['.h', '.hh', '.hpp', '.c', '.cc', '.cpp', '.inc', '.inl']),
-    clang_format_check, clang_format_fix)
+    (r'\.pb\.h$', r'\.pb\.c$'), clang_format_check, clang_format_fix)
 
-PROTO_FORMAT: CodeFormat = CodeFormat('Protocol buffer', ('.proto', ),
+PROTO_FORMAT: CodeFormat = CodeFormat('Protocol buffer', ('.proto', ), (),
                                       clang_format_check, clang_format_fix)
 
-JAVA_FORMAT: CodeFormat = CodeFormat('Java', ('.java', ), clang_format_check,
-                                     clang_format_fix)
+JAVA_FORMAT: CodeFormat = CodeFormat('Java', ('.java', ), (),
+                                     clang_format_check, clang_format_fix)
 
-JAVASCRIPT_FORMAT: CodeFormat = CodeFormat('JavaScript', ('.js', ),
+JAVASCRIPT_FORMAT: CodeFormat = CodeFormat('JavaScript', ('.js', ), (),
                                            clang_format_check,
                                            clang_format_fix)
 
-GO_FORMAT: CodeFormat = CodeFormat('Go', ('.go', ), check_go_format,
+GO_FORMAT: CodeFormat = CodeFormat('Go', ('.go', ), (), check_go_format,
                                    fix_go_format)
 
-PYTHON_FORMAT: CodeFormat = CodeFormat('Python', ('.py', ), check_py_format,
-                                       fix_py_format)
+PYTHON_FORMAT: CodeFormat = CodeFormat('Python', ('.py', ), (),
+                                       check_py_format, fix_py_format)
 
-GN_FORMAT: CodeFormat = CodeFormat('GN', ('.gn', '.gni'), check_gn_format,
+GN_FORMAT: CodeFormat = CodeFormat('GN', ('.gn', '.gni'), (), check_gn_format,
                                    fix_gn_format)
 
 # TODO(pwbug/191): Add real code formatting support for Bazel and CMake
-BAZEL_FORMAT: CodeFormat = CodeFormat('Bazel', ('BUILD', ),
-                                      check_trailing_space, fix_trailing_space)
+BAZEL_FORMAT: CodeFormat = CodeFormat('Bazel', ('BUILD', '.bazel', '.bzl'), (),
+                                      check_bazel_format, fix_bazel_format)
 
 CMAKE_FORMAT: CodeFormat = CodeFormat('CMake', ('CMakeLists.txt', '.cmake'),
-                                      check_trailing_space, fix_trailing_space)
+                                      (), check_trailing_space,
+                                      fix_trailing_space)
 
-RST_FORMAT: CodeFormat = CodeFormat('reStructuredText', ('.rst', ),
+RST_FORMAT: CodeFormat = CodeFormat('reStructuredText', ('.rst', ), (),
                                     check_trailing_space, fix_trailing_space)
 
-MARKDOWN_FORMAT: CodeFormat = CodeFormat('Markdown', ('.md', ),
+MARKDOWN_FORMAT: CodeFormat = CodeFormat('Markdown', ('.md', ), (),
                                          check_trailing_space,
                                          fix_trailing_space)
 
@@ -297,6 +320,7 @@ CODE_FORMATS: Tuple[CodeFormat, ...] = (
 def presubmit_check(code_format: CodeFormat, **filter_paths_args) -> Callable:
     """Creates a presubmit check function from a CodeFormat object."""
     filter_paths_args.setdefault('endswith', code_format.extensions)
+    filter_paths_args.setdefault('exclude', code_format.exclude)
 
     @pw_presubmit.filter_paths(**filter_paths_args)
     def check_code_format(ctx: pw_presubmit.PresubmitContext):

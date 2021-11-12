@@ -19,7 +19,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <string_view>
+#include <span>
 
 #include "pw_kvs/alignment.h"
 #include "pw_kvs/checksum.h"
@@ -27,9 +27,11 @@
 #include "pw_kvs/format.h"
 #include "pw_kvs/internal/hash.h"
 #include "pw_kvs/internal/key_descriptor.h"
-#include "pw_span/span.h"
+#include "pw_kvs/key.h"
 
-namespace pw::kvs::internal {
+namespace pw {
+namespace kvs {
+namespace internal {
 
 // Entry represents a key-value entry in a flash partition.
 class Entry {
@@ -63,8 +65,8 @@ class Entry {
   static Entry Valid(FlashPartition& partition,
                      Address address,
                      const EntryFormat& format,
-                     std::string_view key,
-                     span<const std::byte> value,
+                     Key key,
+                     std::span<const std::byte> value,
                      uint32_t transaction_id) {
     return Entry(
         partition, address, format, key, value, value.size(), transaction_id);
@@ -74,7 +76,7 @@ class Entry {
   static Entry Tombstone(FlashPartition& partition,
                          Address address,
                          const EntryFormat& format,
-                         std::string_view key,
+                         Key key,
                          uint32_t transaction_id) {
     return Entry(partition,
                  address,
@@ -87,9 +89,7 @@ class Entry {
 
   Entry() = default;
 
-  KeyDescriptor descriptor(std::string_view key) const {
-    return descriptor(Hash(key));
-  }
+  KeyDescriptor descriptor(Key key) const { return descriptor(Hash(key)); }
 
   KeyDescriptor descriptor(uint32_t key_hash) const {
     return KeyDescriptor{key_hash,
@@ -97,7 +97,7 @@ class Entry {
                          deleted() ? EntryState::kDeleted : EntryState::kValid};
   }
 
-  StatusWithSize Write(std::string_view key, span<const std::byte> value) const;
+  StatusWithSize Write(Key key, std::span<const std::byte> value) const;
 
   // Changes the format and transcation ID for this entry. In order to calculate
   // the new checksum, the entire entry is read into a small stack-allocated
@@ -119,23 +119,26 @@ class Entry {
         ReadKey(partition(), address_, key_length(), key.data()), key_length());
   }
 
-  StatusWithSize ReadValue(span<std::byte> buffer,
+  StatusWithSize ReadValue(std::span<std::byte> buffer,
                            size_t offset_bytes = 0) const;
 
-  Status ValueMatches(span<const std::byte> value) const;
+  Status ValueMatches(std::span<const std::byte> value) const;
 
-  Status VerifyChecksum(std::string_view key,
-                        span<const std::byte> value) const;
+  Status VerifyChecksum(Key key, std::span<const std::byte> value) const;
 
   Status VerifyChecksumInFlash() const;
 
   // Calculates the total size of an entry, including padding.
   static size_t size(const FlashPartition& partition,
-                     std::string_view key,
-                     span<const std::byte> value) {
+                     Key key,
+                     std::span<const std::byte> value) {
     return AlignUp(sizeof(EntryHeader) + key.size() + value.size(),
                    std::max(partition.alignment_bytes(), kMinAlignmentBytes));
   }
+
+  // Byte size of overhead (not-key, not-value) in an entry. Does not include
+  // any paddding used to get proper size alignment.
+  static constexpr size_t entry_overhead() { return sizeof(EntryHeader); }
 
   Address address() const { return address_; }
 
@@ -173,8 +176,8 @@ class Entry {
   Entry(FlashPartition& partition,
         Address address,
         const EntryFormat& format,
-        std::string_view key,
-        span<const std::byte> value,
+        Key key,
+        std::span<const std::byte> value,
         uint16_t value_size_bytes,
         uint32_t transaction_id);
 
@@ -196,12 +199,12 @@ class Entry {
     return sizeof(EntryHeader) + key_length() + value_size();
   }
 
-  span<const std::byte> checksum_bytes() const {
-    return as_bytes(span(&header_.checksum, 1));
+  std::span<const std::byte> checksum_bytes() const {
+    return std::as_bytes(std::span<const uint32_t>(&header_.checksum, 1));
   }
 
-  span<const std::byte> CalculateChecksum(std::string_view key,
-                                          span<const std::byte> value) const;
+  std::span<const std::byte> CalculateChecksum(
+      Key key, std::span<const std::byte> value) const;
 
   Status CalculateChecksumFromFlash();
 
@@ -218,4 +221,6 @@ class Entry {
   EntryHeader header_;
 };
 
-}  // namespace pw::kvs::internal
+}  // namespace internal
+}  // namespace kvs
+}  // namespace pw

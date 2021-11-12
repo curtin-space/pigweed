@@ -14,52 +14,52 @@
 #pragma once
 
 #include <cstddef>
+#include <span>
+#include <tuple>
 
 #include "pw_containers/intrusive_list.h"
 #include "pw_rpc/channel.h"
-#include "pw_rpc/internal/service.h"
+#include "pw_rpc/internal/channel.h"
+#include "pw_rpc/internal/endpoint.h"
+#include "pw_rpc/internal/method.h"
+#include "pw_rpc/internal/server_call.h"
+#include "pw_rpc/service.h"
+#include "pw_status/status.h"
 
 namespace pw::rpc {
-namespace internal {
 
-class Method;
-class Packet;
-
-}  // namespace internal
-
-class Server {
+class Server : public internal::Endpoint {
  public:
-  constexpr Server(span<Channel> channels) : channels_(channels) {}
-
-  Server(const Server& other) = delete;
-  Server& operator=(const Server& other) = delete;
+  constexpr Server(std::span<Channel> channels) : Endpoint(channels) {}
 
   // Registers a service with the server. This should not be called directly
-  // with an internal::Service; instead, use a generated class which inherits
-  // from it.
-  void RegisterService(internal::Service& service) {
-    services_.push_front(service);
-  }
+  // with a Service; instead, use a generated class which inherits from it.
+  void RegisterService(Service& service) { services_.push_front(service); }
 
-  void ProcessPacket(span<const std::byte> packet, ChannelOutput& interface);
-
-  constexpr size_t channel_count() const { return channels_.size(); }
+  // Processes an RPC packet. The packet may contain an RPC request or a control
+  // packet, the result of which is processed in this function. Returns whether
+  // the packet was able to be processed:
+  //
+  //   OK - The packet was processed by the server.
+  //   DATA_LOSS - Failed to decode the packet.
+  //   INVALID_ARGUMENT - The packet is intended for a client, not a server.
+  //
+  Status ProcessPacket(std::span<const std::byte> packet_data,
+                       ChannelOutput& interface)
+      PW_LOCKS_EXCLUDED(internal::rpc_lock());
 
  private:
-  void InvokeMethod(const internal::Packet& request,
-                    Channel& channel,
-                    internal::Packet& response,
-                    span<std::byte> buffer);
+  friend class internal::Call;
 
-  void SendResponse(const Channel& output,
-                    const internal::Packet& response,
-                    span<std::byte> response_buffer) const;
+  std::tuple<Service*, const internal::Method*> FindMethod(
+      const internal::Packet& packet);
 
-  Channel* FindChannel(uint32_t id) const;
-  Channel* AssignChannel(uint32_t id, ChannelOutput& interface);
+  void HandleClientStreamPacket(const internal::Packet& packet,
+                                internal::Channel& channel,
+                                internal::ServerCall* call) const
+      PW_UNLOCK_FUNCTION(internal::rpc_lock());
 
-  span<Channel> channels_;
-  IntrusiveList<internal::Service> services_;
+  IntrusiveList<Service> services_;
 };
 
 }  // namespace pw::rpc

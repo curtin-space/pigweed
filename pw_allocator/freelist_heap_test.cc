@@ -14,15 +14,16 @@
 
 #include "pw_allocator/freelist_heap.h"
 
+#include <span>
+
 #include "gtest/gtest.h"
-#include "pw_span/span.h"
 
 namespace pw::allocator {
 
 TEST(FreeListHeap, CanAllocate) {
   constexpr size_t N = 2048;
   constexpr size_t kAllocSize = 512;
-  std::byte buf[N] = {std::byte(0)};
+  alignas(Block) std::byte buf[N] = {std::byte(0)};
 
   FreeListHeapBuffer allocator(buf);
 
@@ -30,13 +31,13 @@ TEST(FreeListHeap, CanAllocate) {
 
   ASSERT_NE(ptr, nullptr);
   // In this case, the allocator should be returning us the start of the chunk.
-  EXPECT_EQ(ptr, &buf[0] + sizeof(Block));
+  EXPECT_EQ(ptr, &buf[0] + sizeof(Block) + PW_ALLOCATOR_POISON_OFFSET);
 }
 
 TEST(FreeListHeap, AllocationsDontOverlap) {
   constexpr size_t N = 2048;
   constexpr size_t kAllocSize = 512;
-  std::byte buf[N] = {std::byte(0)};
+  alignas(Block) std::byte buf[N] = {std::byte(0)};
 
   FreeListHeapBuffer allocator(buf);
 
@@ -58,7 +59,7 @@ TEST(FreeListHeap, CanFreeAndRealloc) {
   // and get that value back again.
   constexpr size_t N = 2048;
   constexpr size_t kAllocSize = 512;
-  std::byte buf[N] = {std::byte(0)};
+  alignas(Block) std::byte buf[N] = {std::byte(0)};
 
   FreeListHeapBuffer allocator(buf);
 
@@ -71,7 +72,7 @@ TEST(FreeListHeap, CanFreeAndRealloc) {
 
 TEST(FreeListHeap, ReturnsNullWhenAllocationTooLarge) {
   constexpr size_t N = 2048;
-  std::byte buf[N] = {std::byte(0)};
+  alignas(Block) std::byte buf[N] = {std::byte(0)};
 
   FreeListHeapBuffer allocator(buf);
 
@@ -80,17 +81,19 @@ TEST(FreeListHeap, ReturnsNullWhenAllocationTooLarge) {
 
 TEST(FreeListHeap, ReturnsNullWhenFull) {
   constexpr size_t N = 2048;
-  std::byte buf[N] = {std::byte(0)};
+  alignas(Block) std::byte buf[N] = {std::byte(0)};
 
   FreeListHeapBuffer allocator(buf);
 
-  EXPECT_NE(allocator.Allocate(N - sizeof(Block)), nullptr);
+  EXPECT_NE(
+      allocator.Allocate(N - sizeof(Block) - 2 * PW_ALLOCATOR_POISON_OFFSET),
+      nullptr);
   EXPECT_EQ(allocator.Allocate(1), nullptr);
 }
 
 TEST(FreeListHeap, ReturnedPointersAreAligned) {
   constexpr size_t N = 2048;
-  std::byte buf[N] = {std::byte(0)};
+  alignas(Block) std::byte buf[N] = {std::byte(0)};
 
   FreeListHeapBuffer allocator(buf);
 
@@ -108,16 +111,20 @@ TEST(FreeListHeap, ReturnedPointersAreAligned) {
   EXPECT_EQ(ptr2_start % alignment, static_cast<size_t>(0));
 }
 
+#if defined(CHECK_TEST_CRASHES) && CHECK_TEST_CRASHES
+
+// TODO(amontanez): Ensure that this test triggers an assert.
 TEST(FreeListHeap, CannotFreeNonOwnedPointer) {
   // This is a nasty one to test without looking at the internals of FreeList.
   // We can cheat; create a heap, allocate it all, and try and return something
   // random to it. Try allocating again, and check that we get nullptr back.
   constexpr size_t N = 2048;
-  std::byte buf[N] = {std::byte(0)};
+  alignas(Block) std::byte buf[N] = {std::byte(0)};
 
   FreeListHeapBuffer allocator(buf);
 
-  void* ptr = allocator.Allocate(N - sizeof(Block));
+  void* ptr =
+      allocator.Allocate(N - sizeof(Block) - 2 * PW_ALLOCATOR_POISON_OFFSET);
 
   ASSERT_NE(ptr, nullptr);
 
@@ -133,12 +140,13 @@ TEST(FreeListHeap, CannotFreeNonOwnedPointer) {
   void* ptr_before = allocator.Allocate(1);
   EXPECT_EQ(ptr_before, nullptr);
 }
+#endif  // CHECK_TEST_CRASHES
 
 TEST(FreeListHeap, CanRealloc) {
   constexpr size_t N = 2048;
   constexpr size_t kAllocSize = 512;
   constexpr size_t kNewAllocSize = 768;
-  std::byte buf[N] = {std::byte(1)};
+  alignas(Block) std::byte buf[N] = {std::byte(1)};
 
   FreeListHeapBuffer allocator(buf);
 
@@ -153,7 +161,7 @@ TEST(FreeListHeap, ReallocHasSameContent) {
   constexpr size_t N = 2048;
   constexpr size_t kAllocSize = sizeof(int);
   constexpr size_t kNewAllocSize = sizeof(int) * 2;
-  std::byte buf[N] = {std::byte(1)};
+  alignas(Block) std::byte buf[N] = {std::byte(1)};
   // Data inside the allocated block.
   std::byte data1[kAllocSize];
   // Data inside the reallocated block.
@@ -170,14 +178,14 @@ TEST(FreeListHeap, ReallocHasSameContent) {
   ASSERT_NE(ptr1, nullptr);
   ASSERT_NE(ptr2, nullptr);
   // Verify that data inside the allocated and reallocated chunks are the same.
-  EXPECT_EQ(memcmp(data1, data2, kAllocSize), 0);
+  EXPECT_EQ(std::memcmp(data1, data2, kAllocSize), 0);
 }
 
 TEST(FreeListHeap, ReturnsNullReallocFreedPointer) {
   constexpr size_t N = 2048;
   constexpr size_t kAllocSize = 512;
   constexpr size_t kNewAllocSize = 256;
-  std::byte buf[N] = {std::byte(0)};
+  alignas(Block) std::byte buf[N] = {std::byte(0)};
 
   FreeListHeapBuffer allocator(buf);
 
@@ -192,7 +200,7 @@ TEST(FreeListHeap, ReallocSmallerSize) {
   constexpr size_t N = 2048;
   constexpr size_t kAllocSize = 512;
   constexpr size_t kNewAllocSize = 256;
-  std::byte buf[N] = {std::byte(0)};
+  alignas(Block) std::byte buf[N] = {std::byte(0)};
 
   FreeListHeapBuffer allocator(buf);
 
@@ -207,7 +215,7 @@ TEST(FreeListHeap, ReallocTooLarge) {
   constexpr size_t N = 2048;
   constexpr size_t kAllocSize = 512;
   constexpr size_t kNewAllocSize = 4096;
-  std::byte buf[N] = {std::byte(0)};
+  alignas(Block) std::byte buf[N] = {std::byte(0)};
 
   FreeListHeapBuffer allocator(buf);
 
@@ -224,7 +232,7 @@ TEST(FreeListHeap, CanCalloc) {
   constexpr size_t kAllocSize = 128;
   constexpr size_t kNum = 4;
   constexpr int size = kNum * kAllocSize;
-  std::byte buf[N] = {std::byte(1)};
+  alignas(Block) std::byte buf[N] = {std::byte(1)};
   constexpr std::byte zero{0};
 
   FreeListHeapBuffer allocator(buf);
@@ -243,7 +251,7 @@ TEST(FreeListHeap, CanCallocWeirdSize) {
   constexpr size_t kAllocSize = 143;
   constexpr size_t kNum = 3;
   constexpr int size = kNum * kAllocSize;
-  std::byte buf[N] = {std::byte(132)};
+  alignas(Block) std::byte buf[N] = {std::byte(132)};
   constexpr std::byte zero{0};
 
   FreeListHeapBuffer allocator(buf);
@@ -260,7 +268,7 @@ TEST(FreeListHeap, CanCallocWeirdSize) {
 TEST(FreeListHeap, CallocTooLarge) {
   constexpr size_t N = 2048;
   constexpr size_t kAllocSize = 2049;
-  std::byte buf[N] = {std::byte(1)};
+  alignas(Block) std::byte buf[N] = {std::byte(1)};
 
   FreeListHeapBuffer allocator(buf);
 

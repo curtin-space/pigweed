@@ -14,9 +14,10 @@
 """The envparse module defines an environment variable parser."""
 
 import argparse
+from dataclasses import dataclass
 import os
-from typing import Callable, Dict, Generic, IO, Literal, Mapping, NamedTuple
-from typing import Optional, TypeVar
+from typing import Callable, Dict, Generic, IO, List, Mapping, Optional, TypeVar
+from typing import Union
 
 
 class EnvNamespace(argparse.Namespace):  # pylint: disable=too-few-public-methods
@@ -27,7 +28,8 @@ T = TypeVar('T')
 TypeConversion = Callable[[str], T]
 
 
-class VariableDescriptor(NamedTuple, Generic[T]):
+@dataclass
+class VariableDescriptor(Generic[T]):
     name: str
     type: TypeConversion[T]
     default: Optional[T]
@@ -55,7 +57,9 @@ class EnvironmentParser:
           start with the specified string.
         error_on_unrecognized: If True and prefix is provided, will raise an
           exception if the environment contains a variable with the specified
-          prefix that is not registered on the EnvironmentParser.
+          prefix that is not registered on the EnvironmentParser. If None,
+          checks existence of PW_ENVIRONMENT_NO_ERROR_ON_UNRECOGNIZED (but not
+          value).
 
     Example:
 
@@ -69,16 +73,21 @@ class EnvironmentParser:
     """
     def __init__(self,
                  prefix: Optional[str] = None,
-                 error_on_unrecognized: bool = True) -> None:
+                 error_on_unrecognized: Union[bool, None] = None) -> None:
         self._prefix: Optional[str] = prefix
+        if error_on_unrecognized is None:
+            varname = 'PW_ENVIRONMENT_NO_ERROR_ON_UNRECOGNIZED'
+            error_on_unrecognized = varname not in os.environ
         self._error_on_unrecognized: bool = error_on_unrecognized
+
         self._variables: Dict[str, VariableDescriptor] = {}
+        self._allowed_suffixes: List[str] = []
 
     def add_var(
         self,
         name: str,
         # pylint: disable=redefined-builtin
-        type: TypeConversion[T] = str,  # type: ignore
+        type: TypeConversion[T] = str,  # type: ignore[assignment]
         # pylint: enable=redefined-builtin
         default: Optional[T] = None,
     ) -> None:
@@ -97,10 +106,12 @@ class EnvironmentParser:
             raise ValueError(
                 f'Variable {name} does not have prefix {self._prefix}')
 
-        self._variables[name] = VariableDescriptor(
-            name,
-            type,  # type: ignore
-            default)  # type: ignore
+        self._variables[name] = VariableDescriptor(name, type, default)
+
+    def add_allowed_suffix(self, suffix: str) -> None:
+        """Registers an environment variable name suffix to be allowed."""
+
+        self._allowed_suffixes.append(suffix)
 
     def parse_env(self,
                   env: Optional[Mapping[str, str]] = None) -> EnvNamespace:
@@ -122,15 +133,23 @@ class EnvironmentParser:
                 val = desc.default
             else:
                 try:
-                    val = desc.type(env[var])
+                    val = desc.type(env[var])  # type: ignore
                 except Exception as err:
                     raise EnvironmentValueError(var, env[var]) from err
 
             setattr(namespace, var, val)
 
+        allowed_suffixes = tuple(self._allowed_suffixes)
+        for var in env:
+            if (not hasattr(namespace, var)
+                    and (self._prefix is None or var.startswith(self._prefix))
+                    and var.endswith(allowed_suffixes)):
+                setattr(namespace, var, env[var])
+
         if self._prefix is not None and self._error_on_unrecognized:
             for var in env:
-                if var.startswith(self._prefix) and var not in self._variables:
+                if (var.startswith(self._prefix) and var not in self._variables
+                        and not var.endswith(allowed_suffixes)):
                     raise ValueError(
                         f'Unrecognized environment variable {var}')
 
@@ -158,7 +177,9 @@ def strict_bool(value: str) -> bool:
             or value in _BOOLEAN_TRUE_EMOJI)
 
 
-OpenMode = Literal['r', 'rb', 'w', 'wb']
+# TODO(mohrr) Switch to Literal when no longer supporting Python 3.7.
+# OpenMode = Literal['r', 'rb', 'w', 'wb']
+OpenMode = str
 
 
 class FileType:

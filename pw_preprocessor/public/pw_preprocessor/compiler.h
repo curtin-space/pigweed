@@ -16,6 +16,8 @@
 // This file is used by both C++ and C code.
 #pragma once
 
+#include <assert.h>
+
 // Marks a struct or class as packed.
 #define PW_PACKED(declaration) declaration __attribute__((packed))
 
@@ -49,7 +51,7 @@
 
 // When compiling for host using MinGW, use gnu_printf() rather than printf()
 // to support %z format specifiers.
-#if __USE_MINGW_ANSI_STDIO
+#ifdef __USE_MINGW_ANSI_STDIO
 #define _PW_PRINTF_FORMAT_TYPE gnu_printf
 #else
 #define _PW_PRINTF_FORMAT_TYPE printf
@@ -58,11 +60,18 @@
 #define PW_PRINTF_FORMAT(format_index, parameter_index) \
   __attribute__((format(_PW_PRINTF_FORMAT_TYPE, format_index, parameter_index)))
 
+// Places a variable in the specified linker section.
+#ifdef __APPLE__
+#define PW_PLACE_IN_SECTION(name) __attribute__((section("__DATA," name)))
+#else
+#define PW_PLACE_IN_SECTION(name) __attribute__((section(name)))
+#endif  // __APPLE__
+
 // Places a variable in the specified linker section and directs the compiler
 // to keep the variable, even if it is not used. Depending on the linker
 // options, the linker may still remove this section if it is not declared in
 // the linker script and marked KEEP.
-#if __APPLE__
+#ifdef __APPLE__
 #define PW_KEEP_IN_SECTION(name) __attribute__((section("__DATA," name), used))
 #else
 #define PW_KEEP_IN_SECTION(name) __attribute__((section(name), used))
@@ -70,9 +79,12 @@
 
 // Indicate to the compiler that the annotated function won't return. Example:
 //
-//   void HandleAssertFailure(ErrorCode error_code) PW_NO_RETURN;
+//   PW_NO_RETURN void HandleAssertFailure(ErrorCode error_code);
 //
 #define PW_NO_RETURN __attribute__((noreturn))
+
+// Prevents the compiler from inlining a fuction.
+#define PW_NO_INLINE __attribute__((noinline))
 
 // Indicate to the compiler that the given section of code will not be reached.
 // Example:
@@ -98,8 +110,71 @@
 //     }
 //     return hash;
 //   }
-#if __clang__
+#ifdef __clang__
 #define PW_NO_SANITIZE(check) __attribute__((no_sanitize(check)))
 #else
 #define PW_NO_SANITIZE(check)
 #endif  // __clang__
+
+// Wrapper around `__has_attribute`, which is defined by GCC 5+ and Clang and
+// evaluates to a non zero constant integer if the attribute is supported or 0
+// if not.
+#ifdef __has_attribute
+#define PW_HAVE_ATTRIBUTE(x) __has_attribute(x)
+#else
+#define PW_HAVE_ATTRIBUTE(x) 0
+#endif
+
+#define _PW_REQUIRE_SEMICOLON \
+  static_assert(1, "This macro must be terminated with a semicolon")
+
+// PW_MODIFY_DIAGNOSTICS_PUSH and PW_MODIFY_DIAGNOSTICS_POP are used to turn off
+// or on diagnostics (warnings or errors) for a section of code. Use
+// PW_MODIFY_DIAGNOSTICS_PUSH, use PW_MODIFY_DIAGNOSTIC as many times as needed,
+// then use PW_MODIFY_DIAGNOSTICS_POP to restore the previous settings.
+#define PW_MODIFY_DIAGNOSTICS_PUSH() \
+  _Pragma("GCC diagnostic push") _PW_REQUIRE_SEMICOLON
+#define PW_MODIFY_DIAGNOSTICS_POP() \
+  _Pragma("GCC diagnostic pop") _PW_REQUIRE_SEMICOLON
+
+// Changes how a diagnostic (warning or error) is handled. Most commonly used to
+// disable warnings. PW_MODIFY_DIAGNOSTIC should be used between
+// PW_MODIFY_DIAGNOSTICS_PUSH and PW_MODIFY_DIAGNOSTICS_POP statements to avoid
+// applying the modifications too broadly.
+//
+// 'kind' must be one of warning, error, or ignored.
+#define PW_MODIFY_DIAGNOSTIC(kind, option) \
+  PW_PRAGMA(GCC diagnostic kind option) _PW_REQUIRE_SEMICOLON
+
+// Applies PW_MODIFY_DIAGNOSTIC only for GCC. This is useful for warnings that
+// aren't supported by or don't need to be changed in other compilers.
+#ifdef __clang__
+#define PW_MODIFY_DIAGNOSTIC_GCC(kind, option) _PW_REQUIRE_SEMICOLON
+#else
+#define PW_MODIFY_DIAGNOSTIC_GCC(kind, option) \
+  PW_MODIFY_DIAGNOSTIC(kind, option)
+#endif  // __clang__
+
+// Expands to a _Pragma with the contents as a string. _Pragma must take a
+// single string literal; this can be used to construct a _Pragma argument.
+#define PW_PRAGMA(contents) _Pragma(#contents)
+
+// Marks a function or object as weak, allowing the definition to be overriden.
+//
+// This can be useful when supporting third-party SDKs which may conditionally
+// compile in code, for example:
+//
+//   PW_WEAK void SysTick_Handler(void) {
+//     // Default interrupt handler that might be overriden.
+//   }
+#define PW_WEAK __attribute__((weak))
+
+// Marks a weak function as an alias to another, allowing the definition to
+// be given a default and overriden.
+//
+// This can be useful when supporting third-party SDKs which may conditionally
+// compile in code, for example:
+//
+//   // Driver handler replaced with default unless overridden.
+//   void USART_DriverHandler(void) PW_ALIAS(DefaultDriverHandler);
+#define PW_ALIAS(aliased_to) __attribute__((weak, alias(#aliased_to)))

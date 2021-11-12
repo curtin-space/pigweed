@@ -28,10 +28,12 @@ import argparse
 import copy
 import glob
 import inspect
+import json
 import os
 import shutil
 import subprocess
 import sys
+import time
 
 # TODO(pwbug/67): Remove import hacks once the oxidized prebuilt binaries are
 # proven stable for first-time bootstrapping. For now, continue to support
@@ -41,39 +43,37 @@ import sys
 # If we're running oxidized, filesystem-centric import hacks won't work. In that
 # case, jump straight to the imports and assume oxidation brought in the deps.
 if not getattr(sys, 'oxidized', False):
-    try:
-        # Even if we're running from source, the user may have a functioning
-        # Python environment already set up. Prefer using it over hacks.
-        # pylint: disable=no-name-in-module
-        from pw_env_setup import cargo_setup
-        # pylint: enable=no-name-in-module
-    except ImportError:
-        old_sys_path = copy.deepcopy(sys.path)
-        filename = None
-        if hasattr(sys.modules[__name__], '__file__'):
-            filename = __file__
-        else:
-            # Try introspection in environments where __file__ is not populated.
-            frame = inspect.currentframe()
-            if frame is not None:
-                filename = inspect.getfile(frame)
-        # If none of our strategies worked, the imports are going to fail.
-        if filename is None:
-            raise
-        sys.path.append(
-            os.path.abspath(
-                os.path.join(filename, os.path.pardir, os.path.pardir)))
-        import pw_env_setup  # pylint: disable=unused-import
-        sys.path = old_sys_path
+    old_sys_path = copy.deepcopy(sys.path)
+    filename = None
+    if hasattr(sys.modules[__name__], '__file__'):
+        filename = __file__
+    else:
+        # Try introspection in environments where __file__ is not populated.
+        frame = inspect.currentframe()
+        if frame is not None:
+            filename = inspect.getfile(frame)
+    # If none of our strategies worked, we're in a strange runtime environment.
+    # The imports are almost certainly going to fail.
+    if filename is None:
+        raise RuntimeError(
+            'Unable to locate pw_env_setup module; cannot continue.\n'
+            '\n'
+            'Try updating to one of the standard Python implemetations:\n'
+            '  https://www.python.org/downloads/')
+    sys.path = [
+        os.path.abspath(os.path.join(filename, os.path.pardir, os.path.pardir))
+    ]
+    import pw_env_setup  # pylint: disable=unused-import
+    sys.path = old_sys_path
 
 # pylint: disable=wrong-import-position
 from pw_env_setup.cipd_setup import update as cipd_update
 from pw_env_setup.cipd_setup import wrapper as cipd_wrapper
 from pw_env_setup.colors import Color, enable_colors
-from pw_env_setup import cargo_setup
 from pw_env_setup import environment
 from pw_env_setup import spinner
 from pw_env_setup import virtualenv_setup
+from pw_env_setup import windows_env_start
 
 
 # TODO(pwbug/67, pwbug/68) switch to shutil.which().
@@ -118,7 +118,7 @@ def _which(executable,
 
 
 class _Result:
-    class Status:  # pylint: disable=too-few-public-methods
+    class Status:
         DONE = 'done'
         SKIPPED = 'skipped'
         FAILED = 'failed'
@@ -130,35 +130,24 @@ class _Result:
     def ok(self):
         return self._status in {_Result.Status.DONE, _Result.Status.SKIPPED}
 
-    def status_str(self):
-        return self._status
+    def status_str(self, duration=None):
+        if not duration:
+            return self._status
+
+        duration_parts = []
+        if duration > 60:
+            minutes = int(duration // 60)
+            duration %= 60
+            duration_parts.append('{}m'.format(minutes))
+        duration_parts.append('{:.1f}s'.format(duration))
+        return '{} ({})'.format(self._status, ''.join(duration_parts))
 
     def messages(self):
         return self._messages
 
 
-def _get_env(varname):
-    globs = os.environ.get(varname, '').split(os.pathsep)
-    unique_globs = []
-    for pat in globs:
-        if pat and pat not in unique_globs:
-            unique_globs.append(pat)
-
-    files = []
-    warnings = []
-    for pat in unique_globs:
-        if pat:
-            matches = glob.glob(pat)
-            if not matches:
-                warnings.append(
-                    'warning: pattern "{}" in {} matched 0 files'.format(
-                        pat, varname))
-            files.extend(matches)
-
-    if not files:
-        warnings.append('warning: variable {} matched 0 files'.format(varname))
-
-    return files, warnings
+class ConfigError(Exception):
+    pass
 
 
 def result_func(glob_warnings):
@@ -168,14 +157,26 @@ def result_func(glob_warnings):
     return result
 
 
+class ConfigFileError(Exception):
+    pass
+
+
+class MissingSubmodulesError(Exception):
+    pass
+
+
 # TODO(mohrr) remove disable=useless-object-inheritance once in Python 3.
 # pylint: disable=useless-object-inheritance
+# pylint: disable=too-many-instance-attributes
+# pylint: disable=too-many-arguments
 class EnvSetup(object):
     """Run environment setup for Pigweed."""
-    def __init__(self, pw_root, cipd_cache_dir, shell_file, quiet, *args,
-                 **kwargs):
-        super(EnvSetup, self).__init__(*args, **kwargs)
+    def __init__(self, pw_root, cipd_cache_dir, shell_file, quiet, install_dir,
+                 virtualenv_root, strict, virtualenv_gn_out_dir, json_file,
+                 project_root, config_file, use_existing_cipd,
+                 use_pinned_pip_packages):
         self._env = environment.Environment()
+        self._project_root = project_root
         self._pw_root = pw_root
         self._setup_root = os.path.join(pw_root, 'pw_env_setup', 'py',
                                         'pw_env_setup')
@@ -183,6 +184,10 @@ class EnvSetup(object):
         self._shell_file = shell_file
         self._is_windows = os.name == 'nt'
         self._quiet = quiet
+        self._install_dir = install_dir
+        self._virtualenv_root = (virtualenv_root
+                                 or os.path.join(install_dir, 'pigweed-venv'))
+        self._strict = strict
 
         if os.path.isfile(shell_file):
             os.unlink(shell_file)
@@ -190,7 +195,157 @@ class EnvSetup(object):
         if isinstance(self._pw_root, bytes) and bytes != str:
             self._pw_root = self._pw_root.decode()
 
-        self._env.set('PW_ROOT', self._pw_root)
+        self._cipd_package_file = []
+        self._virtualenv_requirements = []
+        self._virtualenv_gn_targets = []
+        self._virtualenv_gn_args = []
+        self._use_pinned_pip_packages = use_pinned_pip_packages
+        self._optional_submodules = []
+        self._required_submodules = []
+        self._virtualenv_system_packages = False
+        self._root_variable = None
+
+        self._config_file_name = getattr(config_file, 'name', 'config file')
+        if config_file:
+            self._parse_config_file(config_file)
+
+        self._check_submodules()
+
+        self._json_file = json_file
+        if not self._json_file:
+            self._json_file = os.path.join(self._install_dir, 'actions.json')
+
+        self._use_existing_cipd = use_existing_cipd
+        self._virtualenv_gn_out_dir = virtualenv_gn_out_dir
+
+        if self._root_variable:
+            self._env.set(self._root_variable, project_root, deactivate=False)
+        self._env.set('PW_PROJECT_ROOT', project_root, deactivate=False)
+        self._env.set('PW_ROOT', pw_root, deactivate=False)
+        self._env.set('_PW_ACTUAL_ENVIRONMENT_ROOT', install_dir)
+        self._env.add_replacement('_PW_ACTUAL_ENVIRONMENT_ROOT', install_dir)
+        self._env.add_replacement('PW_ROOT', pw_root)
+
+    def _process_globs(self, globs):
+        unique_globs = []
+        for pat in globs:
+            if pat and pat not in unique_globs:
+                unique_globs.append(pat)
+
+        files = []
+        warnings = []
+        for pat in unique_globs:
+            if pat:
+                matches = glob.glob(pat)
+                if not matches:
+                    warning = 'pattern "{}" matched 0 files'.format(pat)
+                    warnings.append('warning: {}'.format(warning))
+                    if self._strict:
+                        raise ConfigError(warning)
+
+                files.extend(matches)
+
+        if globs and not files:
+            warnings.append('warning: matched 0 total files')
+            if self._strict:
+                raise ConfigError('matched 0 total files')
+
+        return files, warnings
+
+    def _parse_config_file(self, config_file):
+        config = json.load(config_file)
+
+        self._root_variable = config.pop('root_variable', None)
+
+        self._optional_submodules.extend(config.pop('optional_submodules', ()))
+        self._required_submodules.extend(config.pop('required_submodules', ()))
+
+        if self._optional_submodules and self._required_submodules:
+            raise ValueError(
+                '{} contains both "optional_submodules" and '
+                '"required_submodules", but these options are mutually '
+                'exclusive'.format(self._config_file_name))
+
+        self._cipd_package_file.extend(
+            os.path.join(self._project_root, x)
+            for x in config.pop('cipd_package_files', ()))
+
+        virtualenv = config.pop('virtualenv', {})
+
+        if virtualenv.get('gn_root'):
+            root = os.path.join(self._project_root, virtualenv.pop('gn_root'))
+        else:
+            root = self._project_root
+
+        for target in virtualenv.pop('gn_targets', ()):
+            self._virtualenv_gn_targets.append(
+                virtualenv_setup.GnTarget('{}#{}'.format(root, target)))
+
+        self._virtualenv_gn_args = virtualenv.pop('gn_args', ())
+
+        self._virtualenv_system_packages = virtualenv.pop(
+            'system_packages', False)
+
+        if virtualenv:
+            raise ConfigFileError(
+                'unrecognized option in {}: "virtualenv.{}"'.format(
+                    self._config_file_name, next(iter(virtualenv))))
+
+        if config:
+            raise ConfigFileError('unrecognized option in {}: "{}"'.format(
+                self._config_file_name, next(iter(config))))
+
+    def _check_submodules(self):
+        unitialized = set()
+
+        # Don't check submodule presence if using the Android Repo Tool.
+        if os.path.isdir(os.path.join(self._project_root, '.repo')):
+            return
+
+        cmd = ['git', 'submodule', 'status', '--recursive']
+
+        for line in subprocess.check_output(
+                cmd, cwd=self._project_root).splitlines():
+            if isinstance(line, bytes):
+                line = line.decode()
+            # Anything but an initial '-' means the submodule is initialized.
+            if not line.startswith('-'):
+                continue
+            unitialized.add(line.split()[1])
+
+        missing = unitialized - set(self._optional_submodules)
+        if self._required_submodules:
+            missing = set(self._required_submodules) & unitialized
+
+        if missing:
+            print(
+                'Not all submodules are initialized. Please run the '
+                'following commands.',
+                file=sys.stderr)
+            print('', file=sys.stderr)
+
+            for miss in missing:
+                print('    git submodule update --init {}'.format(miss),
+                      file=sys.stderr)
+            print('', file=sys.stderr)
+
+            if self._required_submodules:
+                print(
+                    'If these submodules are not required, remove them from '
+                    'the "required_submodules"',
+                    file=sys.stderr)
+
+            else:
+                print(
+                    'If these submodules are not required, add them to the '
+                    '"optional_submodules"',
+                    file=sys.stderr)
+
+            print('list in the environment config JSON file:', file=sys.stderr)
+            print('    {}'.format(self._config_file_name), file=sys.stderr)
+            print('', file=sys.stderr)
+
+            raise MissingSubmodulesError(', '.join(sorted(missing)))
 
     def _log(self, *args, **kwargs):
         # Not using logging module because it's awkward to flush a log handler.
@@ -204,17 +359,19 @@ class EnvSetup(object):
     def setup(self):
         """Runs each of the env_setup steps."""
 
-        enable_colors()
+        if os.name == 'nt':
+            windows_env_start.print_banner(bootstrap=True, no_shell_file=False)
+        else:
+            enable_colors()
 
         steps = [
             ('CIPD package manager', self.cipd),
             ('Python environment', self.virtualenv),
-            ('Pigweed host tools', self.host_tools),
+            ('Host tools', self.host_tools),
         ]
 
-        # TODO(pwbug/63): Add a Windows version of cargo to CIPD.
-        if not self._is_windows:
-            steps.append(("Rust cargo", self.cargo))
+        if self._is_windows:
+            steps.append(("Windows scripts", self.win_scripts))
 
         self._log(
             Color.bold('Downloading and installing packages into local '
@@ -251,11 +408,13 @@ Then use `set +x` to go back to normal.
                 newline=False,
             )
 
+            start = time.time()
             spin = spinner.Spinner()
             with spin():
-                result = step()
+                result = step(spin)
+            stop = time.time()
 
-            self._log(result.status_str())
+            self._log(result.status_str(stop - start))
 
             self._env.echo(result.status_str())
             for message in result.messages():
@@ -268,15 +427,12 @@ Then use `set +x` to go back to normal.
         self._log('')
         self._env.echo('')
 
-        self._env.hash()
+        self._env.finalize()
 
-        self._env.echo(Color.bold('Sanity checking the environment:'))
+        self._env.echo(Color.bold('Checking the environment:'))
         self._env.echo()
 
-        log_level = 'warn' if 'PW_ENVSETUP_QUIET' in os.environ else 'info'
-        doctor = ['pw', '--no-banner', '--loglevel', log_level, 'doctor']
-
-        self._env.command(doctor)
+        self._env.doctor()
         self._env.echo()
 
         self._env.echo(
@@ -286,14 +442,53 @@ Then use `set +x` to go back to normal.
         with open(self._shell_file, 'w') as outs:
             self._env.write(outs)
 
+        deactivate = os.path.join(
+            self._install_dir,
+            'deactivate{}'.format(os.path.splitext(self._shell_file)[1]))
+        with open(deactivate, 'w') as outs:
+            self._env.write_deactivate(outs)
+
+        config = {
+            # Skipping sysname and nodename in os.uname(). nodename could change
+            # based on the current network. sysname won't change, but is
+            # redundant because it's contained in release or version, and
+            # skipping it here simplifies logic.
+            'uname': ' '.join(getattr(os, 'uname', lambda: ())()[2:]),
+            'os': os.name,
+        }
+
+        with open(os.path.join(self._install_dir, 'config.json'), 'w') as outs:
+            outs.write(
+                json.dumps(config, indent=4, separators=(',', ': ')) + '\n')
+
+        if self._json_file is not None:
+            with open(self._json_file, 'w') as outs:
+                self._env.json(outs)
+
         return 0
 
-    def cipd(self):
-        install_dir = os.path.join(self._pw_root, '.cipd')
+    def cipd(self, spin):
+        """Set up cipd and install cipd packages."""
 
-        cipd_client = cipd_wrapper.init(install_dir, silent=True)
+        install_dir = os.path.join(self._install_dir, 'cipd')
 
-        package_files, glob_warnings = _get_env('PW_CIPD_PACKAGE_FILES')
+        # There's no way to get to the UnsupportedPlatform exception if this
+        # flag is set, but this flag should only be set in LUCI builds which
+        # will always have CIPD.
+        if self._use_existing_cipd:
+            cipd_client = 'cipd'
+
+        else:
+            try:
+                cipd_client = cipd_wrapper.init(install_dir, silent=True)
+            except cipd_wrapper.UnsupportedPlatform as exc:
+                return result_func(('    {!r}'.format(exc), ))(
+                    _Result.Status.SKIPPED,
+                    '    abandoning CIPD setup',
+                )
+
+        package_files, glob_warnings = self._process_globs(
+            self._cipd_package_file)
         result = result_func(glob_warnings)
 
         if not package_files:
@@ -303,21 +498,18 @@ Then use `set +x` to go back to normal.
                                   root_install_dir=install_dir,
                                   package_files=package_files,
                                   cache_dir=self._cipd_cache_dir,
-                                  env_vars=self._env):
+                                  env_vars=self._env,
+                                  spin=spin):
             return result(_Result.Status.FAILED)
 
         return result(_Result.Status.DONE)
 
-    def virtualenv(self):
+    def virtualenv(self, unused_spin):
         """Setup virtualenv."""
 
-        venv_path = os.path.join(self._pw_root, '.python3-env')
-
-        requirements, req_glob_warnings = _get_env(
-            'PW_VIRTUALENV_REQUIREMENTS')
-        setup_py_roots, setup_glob_warnings = _get_env(
-            'PW_VIRTUALENV_SETUP_PY_ROOTS')
-        result = result_func(req_glob_warnings + setup_glob_warnings)
+        requirements, req_glob_warnings = self._process_globs(
+            self._virtualenv_requirements)
+        result = result_func(req_glob_warnings)
 
         orig_python3 = _which('python3')
         with self._env():
@@ -335,19 +527,26 @@ Then use `set +x` to go back to normal.
                 shutil.copyfile(new_python3, python3_copy)
             new_python3 = python3_copy
 
-        if not requirements and not setup_py_roots:
+        if not requirements and not self._virtualenv_gn_targets:
             return result(_Result.Status.SKIPPED)
 
-        if not virtualenv_setup.install(venv_path=venv_path,
-                                        requirements=requirements,
-                                        setup_py_roots=setup_py_roots,
-                                        python=new_python3,
-                                        env=self._env):
+        if not virtualenv_setup.install(
+                project_root=self._project_root,
+                venv_path=self._virtualenv_root,
+                requirements=requirements,
+                gn_args=self._virtualenv_gn_args,
+                gn_targets=self._virtualenv_gn_targets,
+                gn_out_dir=self._virtualenv_gn_out_dir,
+                python=new_python3,
+                env=self._env,
+                system_packages=self._virtualenv_system_packages,
+                use_pinned_pip_packages=self._use_pinned_pip_packages,
+        ):
             return result(_Result.Status.FAILED)
 
         return result(_Result.Status.DONE)
 
-    def host_tools(self):
+    def host_tools(self, unused_spin):
         # The host tools are grabbed from CIPD, at least initially. If the
         # user has a current host build, that build will be used instead.
         # TODO(mohrr) find a way to do stuff like this for all projects.
@@ -355,27 +554,12 @@ Then use `set +x` to go back to normal.
         self._env.prepend('PATH', os.path.join(host_dir, 'host_tools'))
         return _Result(_Result.Status.DONE)
 
-    def cargo(self):
-        if not os.environ.get('PW_CARGO_SETUP', ''):
-            return _Result(
-                _Result.Status.SKIPPED,
-                '    Note: Re-run bootstrap with PW_CARGO_SETUP=1 set '
-                'in your environment',
-                '          to enable Rust. (Rust is usually not needed.)',
-            )
-
-        package_files, glob_warnings = _get_env('PW_CARGO_PACKAGE_FILES')
-        result = result_func(glob_warnings)
-
-        if not package_files:
-            return result(_Result.Status.SKIPPED)
-
-        if not cargo_setup.install(pw_root=self._pw_root,
-                                   package_files=package_files,
-                                   env=self._env):
-            return result(_Result.Status.FAILED)
-
-        return result(_Result.Status.DONE)
+    def win_scripts(self, unused_spin):
+        # These scripts act as a compatibility layer for windows.
+        env_setup_dir = os.path.join(self._pw_root, 'pw_env_setup')
+        self._env.prepend('PATH', os.path.join(env_setup_dir,
+                                               'windows_scripts'))
+        return _Result(_Result.Status.DONE)
 
 
 def parse(argv=None):
@@ -391,10 +575,19 @@ def parse(argv=None):
                     stderr=outs).strip()
         except subprocess.CalledProcessError:
             pw_root = None
+
     parser.add_argument(
         '--pw-root',
         default=pw_root,
         required=not pw_root,
+    )
+
+    project_root = os.environ.get('PW_PROJECT_ROOT', None) or pw_root
+
+    parser.add_argument(
+        '--project-root',
+        default=project_root,
+        required=not project_root,
     )
 
     parser.add_argument(
@@ -416,11 +609,70 @@ def parse(argv=None):
         default='PW_ENVSETUP_QUIET' in os.environ,
     )
 
-    return parser.parse_args(argv)
+    parser.add_argument(
+        '--install-dir',
+        help='Location to install environment.',
+        required=True,
+    )
+
+    parser.add_argument(
+        '--config-file',
+        help='JSON file describing CIPD and virtualenv requirements.',
+        type=argparse.FileType('r'),
+        required=True,
+    )
+
+    parser.add_argument(
+        '--virtualenv-gn-out-dir',
+        help=('Output directory to use when building and installing Python '
+              'packages with GN; defaults to a unique path in the environment '
+              'directory.'))
+
+    parser.add_argument(
+        '--virtualenv-root',
+        help=('Root of virtualenv directory. Default: '
+              '<install_dir>/pigweed-venv'),
+        default=None,
+    )
+
+    parser.add_argument(
+        '--json-file',
+        help=('Dump environment variable operations to a JSON file. Default: '
+              '<install_dir>/actions.json'),
+        default=None,
+    )
+
+    parser.add_argument(
+        '--use-existing-cipd',
+        help='Use cipd executable from the environment instead of fetching it.',
+        action='store_true',
+    )
+
+    parser.add_argument(
+        '--strict',
+        help='Fail if there are any warnings.',
+        action='store_true',
+    )
+
+    parser.add_argument(
+        '--unpin-pip-packages',
+        dest='use_pinned_pip_packages',
+        help='Do not use pins of pip packages.',
+        action='store_false',
+    )
+
+    args = parser.parse_args(argv)
+
+    return args
 
 
 def main():
-    return EnvSetup(**vars(parse())).setup()
+    try:
+        return EnvSetup(**vars(parse())).setup()
+    except subprocess.CalledProcessError as err:
+        print()
+        print(err.output)
+        raise
 
 
 if __name__ == '__main__':

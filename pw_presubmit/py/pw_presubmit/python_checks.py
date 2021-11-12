@@ -16,12 +16,11 @@
 These checks assume that they are running in a preconfigured Python environment.
 """
 
+import json
 import logging
 import os
-from pathlib import Path
-import re
 import sys
-from typing import List
+from typing import Optional
 
 try:
     import pw_presubmit
@@ -32,78 +31,51 @@ except ImportError:
         os.path.abspath(__file__))))
     import pw_presubmit
 
-from pw_presubmit import call, filter_paths, git_repo
+from pw_env_setup import python_packages
+from pw_presubmit import (
+    build,
+    Check,
+    filter_paths,
+    PresubmitContext,
+    PresubmitFailure,
+)
 
 _LOG = logging.getLogger(__name__)
 
-
-def run_module(*args, **kwargs):
-    return call('python', '-m', *args, **kwargs)
+_PYTHON_EXTENSIONS = ('.py', '.gn', '.gni')
 
 
-@filter_paths(endswith='.py')
-def test_python_packages(ctx: pw_presubmit.PresubmitContext):
-    packages: List[Path] = []
-    for repo in ctx.repos:
-        packages += git_repo.find_python_packages(ctx.paths, repo=repo)
+@filter_paths(endswith=_PYTHON_EXTENSIONS)
+def gn_python_check(ctx: PresubmitContext):
+    build.gn_gen(ctx.root, ctx.output_dir)
+    build.ninja(ctx.output_dir, 'python.tests', 'python.lint')
 
-    if not packages:
-        _LOG.info('No Python packages were found.')
+
+@filter_paths(endswith=_PYTHON_EXTENSIONS + ('.pylintrc', ))
+def gn_python_lint(ctx: pw_presubmit.PresubmitContext) -> None:
+    build.gn_gen(ctx.root, ctx.output_dir)
+    build.ninja(ctx.output_dir, 'python.lint')
+
+
+@Check
+def check_python_versions(ctx: PresubmitContext):
+    """Checks that the list of installed packages is as expected."""
+
+    build.gn_gen(ctx.root, ctx.output_dir)
+    constraint_file: Optional[str] = None
+    try:
+        for arg in build.get_gn_args(ctx.output_dir):
+            if arg['name'] == 'pw_build_PIP_CONSTRAINTS':
+                constraint_file = json.loads(
+                    arg['current']['value'])[0].strip('/')
+    except json.JSONDecodeError:
+        _LOG.warning('failed to parse GN args json')
         return
 
-    for package in packages:
-        call('python', package / 'setup.py', 'test', cwd=package)
+    if not constraint_file:
+        _LOG.warning('could not find pw_build_PIP_CONSTRAINTS GN arg')
+        return
 
-
-@filter_paths(endswith='.py')
-def pylint(ctx: pw_presubmit.PresubmitContext):
-    disable_checkers = [
-        # BUG(pwbug/22): Hanging indent check conflicts with YAPF 0.29. For
-        # now, use YAPF's version even if Pylint is doing the correct thing
-        # just to keep operations simpler. When YAPF upstream fixes the issue,
-        # delete this code.
-        #
-        # See also: https://github.com/google/yapf/issues/781
-        'bad-continuation',
-    ]
-    run_module(
-        'pylint',
-        '--jobs=0',
-        f'--disable={",".join(disable_checkers)}',
-        *ctx.paths,
-        cwd=ctx.root,
-    )
-
-
-_SETUP_PY = re.compile(r'(?:.+/)?setup\.py')
-
-
-@filter_paths(endswith='.py')
-def mypy(ctx: pw_presubmit.PresubmitContext):
-    env = os.environ.copy()
-    # Use this environment variable to force mypy to colorize output.
-    # See https://github.com/python/mypy/issues/7771
-    env['MYPY_FORCE_COLOR'] = '1'
-
-    run_module(
-        'mypy',
-        *(p for p in ctx.paths if not _SETUP_PY.fullmatch(p.as_posix())),
-        '--pretty',
-        '--color-output',
-        # TODO(pwbug/146): Some imports from installed packages fail. These
-        # imports should be fixed and this option removed.
-        '--ignore-missing-imports',
-        env=env)
-
-
-_ALL_CHECKS = (
-    test_python_packages,
-    pylint,
-    mypy,
-)
-
-
-def all_checks(endswith='.py', **filter_paths_args):
-    return tuple(
-        filter_paths(endswith=endswith, **filter_paths_args)(function)
-        for function in _ALL_CHECKS)
+    with (ctx.root / constraint_file).open('r') as ins:
+        if python_packages.diff(ins) != 0:
+            raise PresubmitFailure

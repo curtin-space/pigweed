@@ -1,8 +1,4 @@
-.. _chapter-pw-sys-io:
-
-.. default-domain:: cpp
-
-.. highlight:: sh
+.. _module-pw_sys_io:
 
 ---------
 pw_sys_io
@@ -14,7 +10,7 @@ of an application.
 
 This facade doesn't dictate any policies on input and output data encoding,
 format, or transmission protocol. It only requires that backends return a
-``Status::OK`` if the operation succeeds. Backends may provide useful error
+``OkStatus()`` if the operation succeeds. Backends may provide useful error
 Status types, but depending on the implementation-specific Status values is
 NOT recommended. Since this facade provides a very vague I/O interface, it
 does NOT provide tests. Backends are expected to provide their own testing to
@@ -34,7 +30,7 @@ Setup
 =====
 This module requires relatively minimal setup:
 
-  1. Chose a ``pw_sys_io`` backend, or write one yourself.
+  1. Choose a ``pw_sys_io`` backend, or write one yourself.
   2. If using GN build, Specify the ``pw_sys_io_BACKEND`` GN build arg to point
      the library that provides a ``pw_sys_io`` backend.
 

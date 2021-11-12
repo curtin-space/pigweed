@@ -14,15 +14,23 @@
 """Spinner!"""
 
 import contextlib
+import os
 import sys
 import threading
 import time
 
+PW_ENVSETUP_DISABLE_SPINNER = (os.environ.get('PW_ENVSETUP_DISABLE_SPINNER')
+                               or os.environ.get('PW_ENVSETUP_QUIET'))
+
+
+def _disabled():
+    return PW_ENVSETUP_DISABLE_SPINNER or (PW_ENVSETUP_DISABLE_SPINNER is None
+                                           and not sys.stdout.isatty())
+
 
 class Spinner(object):  # pylint: disable=useless-object-inheritance
     """Spinner!"""
-    def __init__(self, *args, **kwargs):
-        super(Spinner, self).__init__(*args, **kwargs)
+    def __init__(self):
         self._done = None
         self._thread = None
 
@@ -40,11 +48,17 @@ class Spinner(object):  # pylint: disable=useless-object-inheritance
             i = (i + 1) % len(chars)
 
     def start(self):
+        if _disabled():
+            return
+
         self._done = False
         self._thread = threading.Thread(target=self._spin)
         self._thread.start()
 
     def stop(self):
+        if _disabled():
+            return
+
         assert self._thread
         self._done = True
         self._thread.join()
@@ -57,3 +71,11 @@ class Spinner(object):  # pylint: disable=useless-object-inheritance
             yield self
         finally:
             self.stop()
+
+    @contextlib.contextmanager
+    def pause(self):
+        try:
+            self.stop()
+            yield self
+        finally:
+            self.start()

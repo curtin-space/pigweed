@@ -1,8 +1,4 @@
-.. _chapter-target-runner:
-
-.. default-domain:: cpp
-
-.. highlight:: sh
+.. _module-pw_target_runner:
 
 ----------------
 pw_target_runner
@@ -43,7 +39,7 @@ Configuration
 ^^^^^^^^^^^^^
 The standalone server is configured from a file written in Protobuf text format
 containing a ``pw.target_runner.ServerConfig`` message as defined in
-``//pw_target_runner/pw_target_runner_protos/exec_server_config.proto``.
+``//pw_target_runner/pw_target_runner_server_protos/exec_server_config.proto``.
 
 At least one ``worker`` message must be specified. Each of the workers refers to
 a script or program which is invoked with the path to an executable file as a
@@ -60,7 +56,7 @@ STM32F429I Discovery board with a specified serial number.
   runner {
     command: "stm32f429i_disc1_unit_test_runner"
     args: "--openocd-config"
-    args: "targets/stm32f429i-disc1/py/stm32f429i_disc1_utils/openocd_stm32f4xx.cfg"
+    args: "targets/stm32f429i_disc1/py/stm32f429i_disc1_utils/openocd_stm32f4xx.cfg"
     args: "--serial"
     args: "066DFF575051717867013127"
   }
@@ -68,7 +64,7 @@ STM32F429I Discovery board with a specified serial number.
   runner {
     command: "stm32f429i_disc1_unit_test_runner"
     args: "--openocd-config"
-    args: "targets/stm32f429i-disc1/py/stm32f429i_disc1_utils/openocd_stm32f4xx.cfg"
+    args: "targets/stm32f429i_disc1/py/stm32f429i_disc1_utils/openocd_stm32f4xx.cfg"
     args: "--serial"
     args: "0667FF494849887767196023"
   }

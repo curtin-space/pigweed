@@ -12,11 +12,11 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
-# gn-format disable
 import("//build_overrides/pigweed.gni")
 
 import("$dir_pw_build/input_group.gni")
-import("$dir_pw_build/python_script.gni")
+import("$dir_pw_build/python_action.gni")
+
 declare_args() {
   # Whether or not the current target should build docs.
   pw_docgen_BUILD_DOCS = false
@@ -29,6 +29,7 @@ declare_args() {
 #   inputs: Additional resource files for the docs, such as images.
 #   group_deps: Other pw_doc_group targets on which this group depends.
 #   report_deps: Report card targets on which documentation depends.
+#   other_deps: Dependencies on any other types of targets.
 template("pw_doc_group") {
   assert(defined(invoker.sources), "pw_doc_group requires a list of sources")
 
@@ -44,6 +45,9 @@ template("pw_doc_group") {
   }
   if (defined(invoker.report_deps)) {
     _all_deps += invoker.report_deps
+  }
+  if (defined(invoker.other_deps)) {
+    _all_deps += invoker.other_deps
   }
 
   # Create a group containing the source and input files so that docs are
@@ -93,25 +97,23 @@ template("pw_doc_gen") {
     "--gn-gen-root",
     rebase_path(root_gen_dir, root_build_dir) + "/",
     "--sphinx-build-dir",
-    get_path_info("$target_gen_dir/pw_docgen_tree", "abspath"),
+    rebase_path("$target_gen_dir/pw_docgen_tree", root_build_dir),
     "--conf",
-    get_path_info(invoker.conf, "abspath"),
+    rebase_path(invoker.conf, root_build_dir),
     "--out-dir",
-    get_path_info(invoker.output_directory, "abspath"),
+    rebase_path(invoker.output_directory, root_build_dir),
     "--metadata",
   ]
 
   # Metadata JSON file path.
   _script_args +=
-      get_path_info(get_target_outputs(":$_metadata_file_target"), "abspath")
+      rebase_path(get_target_outputs(":$_metadata_file_target"), root_build_dir)
 
-  foreach(path, invoker.sources) {
-    _script_args += [ get_path_info(path, "abspath") ]
-  }
+  _script_args += rebase_path(invoker.sources, root_build_dir)
 
   if (pw_docgen_BUILD_DOCS) {
-    pw_python_script(target_name) {
-      script = "$dir_pw_docgen/py/docgen.py"
+    pw_python_action(target_name) {
+      script = "$dir_pw_docgen/py/pw_docgen/docgen.py"
       args = _script_args
       deps = [ ":$_metadata_file_target" ]
       inputs = [ invoker.conf ]

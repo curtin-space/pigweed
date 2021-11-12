@@ -12,22 +12,24 @@
 // License for the specific language governing permissions and limitations under
 // the License.
 
-#define PW_LOG_MODULE_NAME "KVS"
+#define PW_LOG_MODULE_NAME "PW_FLASH"
+#define PW_LOG_LEVEL PW_KVS_LOG_LEVEL
 
 #include "pw_kvs/flash_partition_with_stats.h"
 
 #include <cstdio>
 
 #include "pw_kvs/flash_memory.h"
+#include "pw_kvs_private/config.h"
 #include "pw_log/log.h"
 
 namespace pw::kvs {
 
 Status FlashPartitionWithStats::SaveStorageStats(const KeyValueStore& kvs,
                                                  const char* label) {
-  // If size is zero saving stats is disabled so do not save any stats.
-  if (sector_counters_.size() == 0) {
-    return Status::OK;
+  // If empty, saving stats is disabled so do not save any stats.
+  if (sector_counters_.empty()) {
+    return OkStatus();
   }
 
   KeyValueStore::StorageStats stats = kvs.GetStorageStats();
@@ -37,7 +39,7 @@ Status FlashPartitionWithStats::SaveStorageStats(const KeyValueStore& kvs,
   std::FILE* out_file = std::fopen(file_name, "a+");
   if (out_file == nullptr) {
     PW_LOG_ERROR("Failed to dump to %s", file_name);
-    return Status::NOT_FOUND;
+    return Status::NotFound();
   }
 
   // If file is empty add the header row.
@@ -65,7 +67,7 @@ Status FlashPartitionWithStats::SaveStorageStats(const KeyValueStore& kvs,
 
   std::fprintf(out_file, "\n");
   std::fclose(out_file);
-  return Status::OK;
+  return OkStatus();
 }
 
 Status FlashPartitionWithStats::Erase(Address address, size_t num_sectors) {

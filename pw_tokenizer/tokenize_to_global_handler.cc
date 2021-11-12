@@ -14,24 +14,20 @@
 
 #include "pw_tokenizer/tokenize_to_global_handler.h"
 
-#include "pw_tokenizer_private/encode_args.h"
+#include "pw_tokenizer/encode_args.h"
 
 namespace pw {
 namespace tokenizer {
 
-extern "C" void _pw_TokenizeToGlobalHandler(pw_TokenizerStringToken token,
-                                            pw_TokenizerArgTypes types,
-                                            ...) {
-  EncodedMessage encoded;
-  encoded.token = token;
-
+extern "C" void _pw_tokenizer_ToGlobalHandler(pw_tokenizer_Token token,
+                                              pw_tokenizer_ArgTypes types,
+                                              ...) {
   va_list args;
   va_start(args, types);
-  const size_t encoded_bytes = EncodeArgs(types, args, encoded.args);
+  EncodedMessage encoded(token, types, args);
   va_end(args);
 
-  pw_TokenizerHandleEncodedMessage(reinterpret_cast<const uint8_t*>(&encoded),
-                                   sizeof(encoded.token) + encoded_bytes);
+  pw_tokenizer_HandleEncodedMessage(encoded.data_as_uint8(), encoded.size());
 }
 
 }  // namespace tokenizer

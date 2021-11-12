@@ -1,7 +1,4 @@
-.. _chapter-pw-unit-test:
-.. default-domain:: cpp
-
-.. highlight:: sh
+.. _module-pw_unit_test:
 
 ------------
 pw_unit_test
@@ -9,8 +6,10 @@ pw_unit_test
 ``pw_unit_test`` unit testing library with a `Google Test`_-compatible API,
 built on top of embedded-friendly primitives.
 
+.. _Google Test: https://github.com/google/googletest/blob/HEAD/docs/primer.md
+
 ``pw_unit_test`` is a portable library which can run on almost any system from
-from bare metal to a full-fledged desktop OS. It does this by offloading the
+bare metal to a full-fledged desktop OS. It does this by offloading the
 responsibility of test reporting and output to the underlying system,
 communicating its results through a common interface. Unit tests can be written
 once and run under many different environments, empowering developers to write
@@ -110,6 +109,18 @@ framework, register an event handler, and call the ``RUN_ALL_TESTS`` macro.
     return RUN_ALL_TESTS();
   }
 
+Test filtering
+^^^^^^^^^^^^^^
+If using C++17, filters can be set on the test framework to run only a subset of
+the registered unit tests. This is useful when many tests are bundled into a
+single application image.
+
+Currently, only a test suite filter is supported. This is set by calling
+``pw::unit_test::SetTestSuitesToRun`` with a list of suite names.
+
+.. note::
+  Test filtering is only supported in C++17.
+
 Build system integration
 ^^^^^^^^^^^^^^^^^^^^^^^^
 ``pw_unit_test`` integrates directly into Pigweed's GN build system. To define
@@ -127,7 +138,7 @@ section, and use the ``pw_test`` template to register your test code.
 
 The ``pw_unit_test`` module provides a few optional libraries to simplify setup:
 
- - ``simple_printing_event_handler```: When running tests, output test results
+ - ``simple_printing_event_handler``: When running tests, output test results
    as plain text over ``pw_sys_io``.
  - ``simple_printing_main``: Implements a ``main()`` function that simply runs
    tests using the ``simple_printing_event_handler``.
@@ -139,10 +150,13 @@ The ``pw_unit_test`` module provides a few optional libraries to simplify setup:
 
 pw_test template
 ----------------
+``pw_test`` defines a single unit test suite. It creates several sub-targets.
 
-``pw_test`` defines a single test binary. It wraps ``pw_executable`` and pulls
-in the test framework as well as the test entry point defined by the
-``pw_unit_test_main`` build variable.
+* ``<target_name>``: The test suite within a single binary. The test code is
+  linked against the target set in the build arg ``pw_unit_test_MAIN``.
+* ``<target_name>.run``: If ``pw_unit_test_AUTOMATIC_RUNNER`` is set, this
+  target runs the test as part of the build.
+* ``<target_name>.lib``: The test sources without ``pw_unit_test_MAIN``.
 
 **Arguments**
 
@@ -168,10 +182,18 @@ in the test framework as well as the test entry point defined by the
 
 pw_test_group template
 ----------------------
+``pw_test_group`` defines a collection of tests or other test groups. It creates
+several sub-targets:
 
-``pw_test_group`` defines a collection of tests or other test groups. Each
-module should expose a ``pw_test_group`` called ``tests`` with the module's test
-binaries.
+* ``<target_name>``: The test group itself.
+* ``<target_name>.run``: If ``pw_unit_test_AUTOMATIC_RUNNER`` is set, this
+  target runs all of the tests in the group and all of its group dependencies
+  individually.
+* ``<target_name>.lib``: The sources of all of the tests in this group and its
+  dependencies.
+* ``<target_name>.bundle``: All of the tests in the group and its dependencies
+  bundled into a single binary.
+* ``<target_name>.bundle.run``: Automatic runner for the test bundle.
 
 **Arguments**
 
@@ -202,5 +224,77 @@ binaries.
     # ...
   }
 
+pw_facade_test template
+-----------------------
+Pigweed facade test templates allow individual unit tests to build under the
+current device target configuration while overriding specific build arguments.
+This allows these tests to replace a facade's backend for the purpose of testing
+the facade layer.
 
-.. _Google Test: https://github.com/google/googletest/blob/master/googletest/docs/primer.md
+.. warning::
+   Facade tests are costly because each facade test will trigger a re-build of
+   every dependency of the test. While this sounds excessive, it's the only
+   technically correct way to handle this type of test.
+
+.. warning::
+   Some facade test configurations may not be compatible with your target. Be
+   careful when running a facade test on a system that heavily depends on the
+   facade being tested.
+
+RPC service
+===========
+``pw_unit_test`` provides an RPC service which runs unit tests on demand and
+streams the results back to the client. The service is defined in
+``pw_unit_test_proto/unit_test.proto``, and implemented by the GN target
+``$dir_pw_unit_test:rpc_service``.
+
+To set up RPC-based unit tests in your application, instantiate a
+``pw::unit_test::UnitTestService`` and register it with your RPC server.
+
+.. code:: c++
+
+  #include "pw_rpc/server.h"
+  #include "pw_unit_test/unit_test_service.h"
+
+  // Server setup; refer to pw_rpc docs for more information.
+  pw::rpc::Channel channels[] = {
+   pw::rpc::Channel::Create<1>(&my_output),
+  };
+  pw::rpc::Server server(channels);
+
+  pw::unit_test::UnitTestService unit_test_service;
+
+  void RegisterServices() {
+    server.RegisterService(unit_test_services);
+  }
+
+All tests flashed to an attached device can be run via python by calling
+``pw_unit_test.rpc.run_tests()`` with a RPC client services object that has
+the unit testing RPC service enabled. By default, the results will output via
+logging.
+
+.. code:: python
+
+  from pw_hdlc.rpc import HdlcRpcClient
+  from pw_unit_test.rpc import run_tests
+
+  PROTO = Path(os.environ['PW_ROOT'],
+               'pw_unit_test/pw_unit_test_proto/unit_test.proto')
+
+  client = HdlcRpcClient(serial.Serial(device, baud), PROTO)
+  run_tests(client.rpcs())
+
+pw_unit_test.rpc
+^^^^^^^^^^^^^^^^
+.. automodule:: pw_unit_test.rpc
+  :members: EventHandler, run_tests
+
+Module Configuration Options
+============================
+The following configurations can be adjusted via compile-time configuration of
+this module.
+
+.. c:macro:: PW_UNIT_TEST_CONFIG_MEMORY_POOL_SIZE
+
+  The size of the memory pool to use for test fixture instances. By default this
+  is set to 16K.

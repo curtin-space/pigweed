@@ -14,14 +14,12 @@
 # the License.
 """Generates a C macro for the PW tokenizer 65599 fixed length hash."""
 
-from __future__ import print_function
-
 import datetime
 import os
 
 HASH_CONSTANT = 65599
 HASH_NAME = 'pw_tokenizer_65599_fixed_length'
-HASH_LENGTHS = 80, 96, 128
+HASH_LENGTHS = 80, 96, 128, 256
 
 FILE_HEADER = """\
 // Copyright {year} The Pigweed Authors

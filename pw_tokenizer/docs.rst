@@ -1,8 +1,4 @@
-.. default-domain:: cpp
-
-.. highlight:: sh
-
-.. _chapter-pw-tokenizer:
+.. _module-pw_tokenizer:
 
 ------------
 pw_tokenizer
@@ -121,14 +117,15 @@ These steps can be adapted as needed.
      the BUILD.gn's ``pw_tokenizer`` target to the build.
   2. Use the tokenization macros in your code. See `Tokenization`_.
   3. Add the contents of ``pw_tokenizer_linker_sections.ld`` to your project's
-     linker script.
+     linker script. In GN and CMake, this step is done automatically.
   4. Compile your code to produce an ELF file.
   5. Run ``database.py create`` on the ELF file to generate a CSV token
      database. See `Managing token databases`_.
   6. Commit the token database to your repository. See notes in `Database
      management`_.
   7. Integrate a ``database.py add`` command to your build to automatically
-     update the committed token database. See `Update a database`_.
+     update the committed token database. In GN, use the
+     ``pw_tokenizer_database`` template to do this. See `Update a database`_.
   8. Integrate ``detokenize.py`` or the C++ detokenization library with your
      tools to decode tokenized logs. See `Detokenization`_.
 
@@ -165,15 +162,15 @@ buffer on the stack. The size of the buffer is set with
 ``PW_TOKENIZER_CFG_ENCODING_BUFFER_SIZE_BYTES``.
 
 This macro is provided by the ``pw_tokenizer:global_handler`` facade. The
-backend for this facade must define the ``pw_TokenizerHandleEncodedMessage``
+backend for this facade must define the ``pw_tokenizer_HandleEncodedMessage``
 C-linkage function.
 
 .. code-block:: cpp
 
   PW_TOKENIZE_TO_GLOBAL_HANDLER(format_string_literal, arguments...);
 
-  void pw_TokenizerHandleEncodedMessage(const uint8_t encoded_message[],
-                                        size_t size_bytes);
+  void pw_tokenizer_HandleEncodedMessage(const uint8_t encoded_message[],
+                                         size_t size_bytes);
 
 ``PW_TOKENIZE_TO_GLOBAL_HANDLER_WITH_PAYLOAD`` is similar, but passes a
 ``uintptr_t`` argument to the global handler function. Values like a log level
@@ -181,7 +178,7 @@ can be packed into the ``uintptr_t``.
 
 This macro is provided by the ``pw_tokenizer:global_handler_with_payload``
 facade. The backend for this facade must define the
-``pw_TokenizerHandleEncodedMessageWithPayload`` C-linkage function.
+``pw_tokenizer_HandleEncodedMessageWithPayload`` C-linkage function.
 
 .. code-block:: cpp
 
@@ -189,9 +186,8 @@ facade. The backend for this facade must define the
                                              format_string_literal,
                                              arguments...);
 
-  void pw_TokenizerHandleEncodedMessageWithPayload(uintptr_t payload,
-                                                   const uint8_t encoded_message[],
-                                                   size_t size_bytes);
+  void pw_tokenizer_HandleEncodedMessageWithPayload(
+      uintptr_t payload, const uint8_t encoded_message[], size_t size_bytes);
 
 .. admonition:: When to use these macros
 
@@ -237,8 +233,97 @@ than the other macros, so its per-use code size overhead is larger.
   widely expanded macros, such as a logging macro, because it will result in
   larger code size than its alternatives.
 
-Example: binary logging
-^^^^^^^^^^^^^^^^^^^^^^^
+.. _module-pw_tokenizer-custom-macro:
+
+Tokenize with a custom macro
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Projects may need more flexbility than the standard ``pw_tokenizer`` macros
+provide. To support this, projects may define custom tokenization macros. This
+requires the use of two low-level ``pw_tokenizer`` macros:
+
+.. c:macro:: PW_TOKENIZE_FORMAT_STRING(domain, mask, format, ...)
+
+  Tokenizes a format string and sets the ``_pw_tokenizer_token`` variable to the
+  token. Must be used in its own scope, since the same variable is used in every
+  invocation.
+
+  The tokenized string uses the specified :ref:`tokenization domain
+  <module-pw_tokenizer-domains>`.  Use ``PW_TOKENIZER_DEFAULT_DOMAIN`` for the
+  default. The token also may be masked; use ``UINT32_MAX`` to keep all bits.
+
+.. c:macro:: PW_TOKENIZER_ARG_TYPES(...)
+
+  Converts a series of arguments to a compact format that replaces the format
+  string literal.
+
+Use these two macros within the custom tokenization macro to call a function
+that does the encoding. The following example implements a custom tokenization
+macro for use with :ref:`module-pw_log_tokenized`.
+
+.. code-block:: cpp
+
+  #include "pw_tokenizer/tokenize.h"
+
+  #ifndef __cplusplus
+  extern "C" {
+  #endif
+
+  void EncodeTokenizedMessage(pw_tokenizer_Payload metadata,
+                              pw_tokenizer_Token token,
+                              pw_tokenizer_ArgTypes types,
+                              ...);
+
+  #ifndef __cplusplus
+  }  // extern "C"
+  #endif
+
+  #define PW_LOG_TOKENIZED_ENCODE_MESSAGE(metadata, format, ...)         \
+    do {                                                                 \
+      PW_TOKENIZE_FORMAT_STRING(                                         \
+          PW_TOKENIZER_DEFAULT_DOMAIN, UINT32_MAX, format, __VA_ARGS__); \
+      EncodeTokenizedMessage(payload,                                    \
+                             _pw_tokenizer_token,                        \
+                             PW_TOKENIZER_ARG_TYPES(__VA_ARGS__)         \
+                                 PW_COMMA_ARGS(__VA_ARGS__));            \
+    } while (0)
+
+In this example, the ``EncodeTokenizedMessage`` function would handle encoding
+and processing the message. Encoding is done by the
+``pw::tokenizer::EncodedMessage`` class or ``pw::tokenizer::EncodeArgs``
+function from ``pw_tokenizer/encode_args.h``. The encoded message can then be
+transmitted or stored as needed.
+
+.. code-block:: cpp
+
+  #include "pw_log_tokenized/log_tokenized.h"
+  #include "pw_tokenizer/encode_args.h"
+
+  void HandleTokenizedMessage(pw::log_tokenized::Metadata metadata,
+                              std::span<std::byte> message);
+
+  extern "C" void EncodeTokenizedMessage(const pw_tokenizer_Payload metadata,
+                                         const pw_tokenizer_Token token,
+                                         const pw_tokenizer_ArgTypes types,
+                                         ...) {
+    va_list args;
+    va_start(args, types);
+    pw::tokenizer::EncodedMessage encoded_message(token, types, args);
+    va_end(args);
+
+    HandleTokenizedMessage(metadata, encoded_message);
+  }
+
+.. admonition:: When to use a custom macro
+
+  Use existing tokenization macros whenever possible. A custom macro may be
+  needed to support use cases like the following:
+
+    * Variations of ``PW_TOKENIZE_TO_GLOBAL_HANDLER_WITH_PAYLOAD`` that take
+      different arguments.
+    * Supporting global handler macros that use different handler functions.
+
+Binary logging with pw_tokenizer
+--------------------------------
 String tokenization is perfect for logging. Consider the following log macro,
 which gathers the file, line number, and log message. It calls the ``RecordLog``
 function, which formats the log string, collects a timestamp, and transmits the
@@ -268,19 +353,19 @@ result.
 It is trivial to convert this to a binary log using the tokenizer. The
 ``RecordLog`` call is replaced with a
 ``PW_TOKENIZE_TO_GLOBAL_HANDLER_WITH_PAYLOAD`` invocation. The
-``pw_TokenizerHandleEncodedMessageWithPayload`` implementation collects the
+``pw_tokenizer_HandleEncodedMessageWithPayload`` implementation collects the
 timestamp and transmits the message with ``TransmitLog``.
 
 .. code-block:: cpp
 
   #define LOG_INFO(format, ...)                   \
       PW_TOKENIZE_TO_GLOBAL_HANDLER_WITH_PAYLOAD( \
-          (uintptr_t)LogLevel_INFO,                   \
+          (pw_tokenizer_Payload)LogLevel_INFO,    \
           __FILE_NAME__ ":%d " format,            \
           __LINE__,                               \
           __VA_ARGS__);                           \
 
-  extern "C" void pw_TokenizerHandleEncodedMessageWithPayload(
+  extern "C" void pw_tokenizer_HandleEncodedMessageWithPayload(
       uintptr_t level, const uint8_t encoded_message[], size_t size_bytes) {
     if (static_cast<LogLevel>(level) >= current_log_level) {
       TransmitLog(TimeSinceBootMillis(), encoded_message, size_bytes);
@@ -293,6 +378,30 @@ string. Since the string is tokenized, this has no effect on binary size. A
 line of the log message does not generate a new token. There is no overhead for
 additional tokens, but it may not be desirable to fill a token database with
 duplicate log lines.
+
+Tokenizing function names
+-------------------------
+The string literal tokenization functions support tokenizing string literals or
+constexpr character arrays (``constexpr const char[]``). In GCC and Clang, the
+special ``__func__`` variable and ``__PRETTY_FUNCTION__`` extension are declared
+as ``static constexpr char[]`` in C++ instead of the standard ``static const
+char[]``. This means that ``__func__`` and ``__PRETTY_FUNCTION__`` can be
+tokenized while compiling C++ with GCC or Clang.
+
+.. code-block:: cpp
+
+  // Tokenize the special function name variables.
+  constexpr uint32_t function = PW_TOKENIZE_STRING(__func__);
+  constexpr uint32_t pretty_function = PW_TOKENIZE_STRING(__PRETTY_FUNCTION__);
+
+  // Tokenize the function name variables to a handler function.
+  PW_TOKENIZE_TO_GLOBAL_HANDLER(__func__)
+  PW_TOKENIZE_TO_GLOBAL_HANDLER(__PRETTY_FUNCTION__)
+
+Note that ``__func__`` and ``__PRETTY_FUNCTION__`` are not string literals.
+They are defined as static character arrays, so they cannot be implicitly
+concatentated with string literals. For example, ``printf(__func__ ": %d",
+123);`` will not compile.
 
 Tokenization in Python
 ----------------------
@@ -333,39 +442,35 @@ the SDBM project. All hashing is done at compile time.
 
 In C code, strings are hashed with a preprocessor macro. For compatibility with
 macros, the hash must be limited to a fixed maximum number of characters. This
-value is set by ``PW_TOKENIZER_CFG_HASH_LENGTH``.
+value is set by ``PW_TOKENIZER_CFG_C_HASH_LENGTH``. Increasing
+``PW_TOKENIZER_CFG_C_HASH_LENGTH`` increases the compilation time for C due to
+the complexity of the hashing macros.
 
-Increasing ``PW_TOKENIZER_CFG_HASH_LENGTH`` increases the compilation time for C
-due to the complexity of the hashing macros. C++ macros use a constexpr
-function instead of a macro, so the compilation time impact is minimal. Projects
-primarily in C++ may use a large value for ``PW_TOKENIZER_CFG_HASH_LENGTH``
-(perhaps even ``std::numeric_limits<size_t>::max()``).
+C++ macros use a constexpr function instead of a macro. This function works with
+any length of string and has lower compilation time impact than the C macros.
+For consistency, C++ tokenization uses the same hash algorithm, but the
+calculated values will differ between C and C++ for strings longer than
+``PW_TOKENIZER_CFG_C_HASH_LENGTH`` characters.
+
+.. _module-pw_tokenizer-domains:
 
 Tokenization domains
 --------------------
-``pw_tokenizer`` supports having multiple tokenization domains. Strings from
-each tokenization domain are stored in separate sections in the ELF file. This
-allows projects to keep tokens from different sources separate. Potential use
-cases include the following:
+``pw_tokenizer`` supports having multiple tokenization domains. Domains are a
+string label associated with each tokenized string. This allows projects to keep
+tokens from different sources separate. Potential use cases include the
+following:
 
 * Keep large sets of tokenized strings separate to avoid collisions.
 * Create a separate database for a small number of strings that use truncated
   tokens, for example only 10 or 16 bits instead of the full 32 bits.
 
-Strings are tokenized by default into the "default" domain. For many projects,
-a single tokenization domain is sufficient, so no additional configuration is
-required.
-
-To support other multiple domains, add a ``pw_tokenized.<new domain name>``
-linker section, as described in ``pw_tokenizer_linker_sections.ld``. Strings are
-tokenized into a domain by providing the domain name as a string literal to the
-``*_DOMAIN`` versions of the tokenization macros. Domain names must be comprised
-of alphanumeric characters and underscores; spaces and special characters are
-not permitted.
+If no domain is specified, the domain is empty (``""``). For many projects, this
+default domain is sufficient, so no additional configuration is required.
 
 .. code-block:: cpp
 
-  // Tokenizes this string to the "default" domain.
+  // Tokenizes this string to the default ("") domain.
   PW_TOKENIZE_STRING("Hello, world!");
 
   // Tokenizes this string to the "my_custom_domain" domain.
@@ -382,6 +487,101 @@ example, the following reads strings in ``some_domain`` from ``my_image.elf``.
 
 See `Managing token databases`_ for information about the ``database.py``
 command line tool.
+
+Smaller tokens with masking
+---------------------------
+``pw_tokenizer`` uses 32-bit tokens. On 32-bit or 64-bit architectures, using
+fewer than 32 bits does not improve runtime or code size efficiency. However,
+when tokens are packed into data structures or stored in arrays, the size of the
+token directly affects memory usage. In those cases, every bit counts, and it
+may be desireable to use fewer bits for the token.
+
+``pw_tokenizer`` allows users to provide a mask to apply to the token. This
+masked token is used in both the token database and the code. The masked token
+is not a masked version of the full 32-bit token, the masked token is the token.
+This makes it trivial to decode tokens that use fewer than 32 bits.
+
+Masking functionality is provided through the ``*_MASK`` versions of the macros.
+For example, the following generates 16-bit tokens and packs them into an
+existing value.
+
+.. code-block:: cpp
+
+  constexpr uint32_t token = PW_TOKENIZE_STRING_MASK("domain", 0xFFFF, "Pigweed!");
+  uint32_t packed_word = (other_bits << 16) | token;
+
+Tokens are hashes, so tokens of any size have a collision risk. The fewer bits
+used for tokens, the more likely two strings are to hash to the same token. See
+`token collisions`_.
+
+Token collisions
+----------------
+Tokens are calculated with a hash function. It is possible for different
+strings to hash to the same token. When this happens, multiple strings will have
+the same token in the database, and it may not be possible to unambiguously
+decode a token.
+
+The detokenization tools attempt to resolve collisions automatically. Collisions
+are resolved based on two things:
+
+  - whether the tokenized data matches the strings arguments' (if any), and
+  - if / when the string was marked as having been removed from the database.
+
+Working with collisions
+^^^^^^^^^^^^^^^^^^^^^^^
+Collisions may occur occasionally. Run the command
+``python -m pw_tokenizer.database report <database>`` to see information about a
+token database, including any collisions.
+
+If there are collisions, take the following steps to resolve them.
+
+  - Change one of the colliding strings slightly to give it a new token.
+  - In C (not C++), artificial collisions may occur if strings longer than
+    ``PW_TOKENIZER_CFG_C_HASH_LENGTH`` are hashed. If this is happening,
+    consider setting ``PW_TOKENIZER_CFG_C_HASH_LENGTH`` to a larger value.
+    See ``pw_tokenizer/public/pw_tokenizer/config.h``.
+  - Run the ``mark_removed`` command with the latest version of the build
+    artifacts to mark missing strings as removed. This deprioritizes them in
+    collision resolution.
+
+    .. code-block:: sh
+
+      python -m pw_tokenizer.database mark_removed --database <database> <ELF files>
+
+    The ``purge`` command may be used to delete these tokens from the database.
+
+Probability of collisions
+^^^^^^^^^^^^^^^^^^^^^^^^^
+Hashes of any size have a collision risk. The probability of one at least
+one collision occurring for a given number of strings is unintuitively high
+(this is known as the `birthday problem
+<https://en.wikipedia.org/wiki/Birthday_problem>`_). If fewer than 32 bits are
+used for tokens, the probability of collisions increases substantially.
+
+This table shows the approximate number of strings that can be hashed to have a
+1% or 50% probability of at least one collision (assuming a uniform, random
+hash).
+
++-------+---------------------------------------+
+| Token | Collision probability by string count |
+| bits  +--------------------+------------------+
+|       |         50%        |          1%      |
++=======+====================+==================+
+|   32  |       77000        |        9300      |
++-------+--------------------+------------------+
+|   31  |       54000        |        6600      |
++-------+--------------------+------------------+
+|   24  |        4800        |         580      |
++-------+--------------------+------------------+
+|   16  |         300        |          36      |
++-------+--------------------+------------------+
+|    8  |          19        |           3      |
++-------+--------------------+------------------+
+
+Keep this table in mind when masking tokens (see `Smaller tokens with
+masking`_). 16 bits might be acceptable when tokenizing a small set of strings,
+such as module names, but won't be suitable for large sets of strings, like log
+messages.
 
 Token databases
 ===============
@@ -417,7 +617,7 @@ The binary database format is comprised of a 16-byte header followed by a series
 of 8-byte entries. Each entry stores the token and the removal date, which is
 0xFFFFFFFF if there is none. The string literals are stored next in the same
 order as the entries. Strings are stored with null terminators. See
-`token_database.h <https://pigweed.googlesource.com/pigweed/pigweed/+/refs/heads/master/pw_tokenizer/public/pw_tokenizer/token_database.h>`_
+`token_database.h <https://pigweed.googlesource.com/pigweed/pigweed/+/HEAD/pw_tokenizer/public/pw_tokenizer/token_database.h>`_
 for full details.
 
 The binary form of the CSV database is shown below. It contains the same
@@ -482,6 +682,49 @@ command.
 A CSV token database can be checked into a source repository and updated as code
 changes are made. The build system can invoke ``database.py`` to update the
 database after each build.
+
+GN integration
+^^^^^^^^^^^^^^
+Token databases may be updated or created as part of a GN build. The
+``pw_tokenizer_database`` template provided by
+``$dir_pw_tokenizer/database.gni`` automatically updates an in-source tokenized
+strings database or creates a new database with artifacts from one or more GN
+targets or other database files.
+
+To create a new database, set the ``create`` variable to the desired database
+type (``"csv"`` or ``"binary"``). The database will be created in the output
+directory. To update an existing database, provide the path to the database with
+the ``database`` variable.
+
+.. code-block::
+
+  import("//build_overrides/pigweed.gni")
+
+  import("$dir_pw_tokenizer/database.gni")
+
+  pw_tokenizer_database("my_database") {
+    database = "database_in_the_source_tree.csv"
+    targets = [ "//firmware/image:foo(//targets/my_board:some_toolchain)" ]
+    input_databases = [ "other_database.csv" ]
+  }
+
+Instead of specifying GN targets, paths or globs to output files may be provided
+with the ``paths`` option.
+
+.. code-block::
+
+  pw_tokenizer_database("my_database") {
+    database = "database_in_the_source_tree.csv"
+    deps = [ ":apps" ]
+    optional_paths = [ "$root_build_dir/**/*.elf" ]
+  }
+
+.. note::
+
+  The ``paths`` and ``optional_targets`` arguments do not add anything to
+  ``deps``, so there is no guarantee that the referenced artifacts will exist
+  when the database is updated. Provide ``targets`` or ``deps`` or build other
+  GN targets first if this is a concern.
 
 Detokenization
 ==============
@@ -548,6 +791,13 @@ class, which can be used in place of the standard ``Detokenizer``. This class
 monitors database files for changes and automatically reloads them when they
 change. This is helpful for long-running tools that use detokenization.
 
+For messages that are optionally tokenized and may be encoded as binary,
+Base64, or plaintext UTF-8, use
+:func:`pw_tokenizer.proto.decode_optionally_tokenized`. This will attempt to
+determine the correct method to detokenize and always provide a printable
+string. For more information on this feature, see
+:ref:`module-pw_tokenizer-proto`.
+
 C++
 ---
 The C++ detokenization libraries can be used in C++ or any language that can
@@ -591,6 +841,16 @@ this check can be done at compile time.
     return Detokenizer(kDefaultDatabase);
   }
 
+Protocol buffers
+----------------
+``pw_tokenizer`` provides utilities for handling tokenized fields in protobufs.
+See :ref:`module-pw_tokenizer-proto` for details.
+
+.. toctree::
+  :hidden:
+
+  proto.rst
+
 Base64 format
 =============
 The tokenizer encodes messages to a compact binary representation. Applications
@@ -617,12 +877,12 @@ string's token is 0x4b016e66.
 Encoding
 --------
 To encode with the Base64 format, add a call to
-``pw::tokenizer::PrefixedBase64Encode`` or ``pw_TokenizerPrefixedBase64Encode``
+``pw::tokenizer::PrefixedBase64Encode`` or ``pw_tokenizer_PrefixedBase64Encode``
 in the tokenizer handler function. For example,
 
 .. code-block:: cpp
 
-  void pw_TokenizerHandleEncodedMessage(const uint8_t encoded_message[],
+  void pw_tokenizer_HandleEncodedMessage(const uint8_t encoded_message[],
                                         size_t size_bytes) {
     char base64_buffer[64];
     size_t base64_size = pw::tokenizer::PrefixedBase64Encode(
@@ -633,8 +893,8 @@ in the tokenizer handler function. For example,
 
 Decoding
 --------
-Base64 decoding and detokenizing is supported in the Python detokenizer through
-the ``detokenize_base64`` and related functions.
+The Python ``Detokenizer`` class supprts decoding and detokenizing prefixed
+Base64 messages with ``detokenize_base64`` and related methods.
 
 .. tip::
   The Python detokenization tools support recursive detokenization for prefixed
@@ -651,12 +911,12 @@ the ``detokenize_base64`` and related functions.
    "$pEVTYQkkUmhZam1RPT0=" → "Nested message: $RhYjmQ==" → "Nested message: Wow!"
 
 Base64 decoding is supported in C++ or C with the
-``pw::tokenizer::PrefixedBase64Decode`` or ``pw_TokenizerPrefixedBase64Decode``
+``pw::tokenizer::PrefixedBase64Decode`` or ``pw_tokenizer_PrefixedBase64Decode``
 functions.
 
 .. code-block:: cpp
 
-  void pw_TokenizerHandleEncodedMessage(const uint8_t encoded_message[],
+  void pw_tokenizer_HandleEncodedMessage(const uint8_t encoded_message[],
                                         size_t size_bytes) {
     char base64_buffer[64];
     size_t base64_size = pw::tokenizer::PrefixedBase64Encode(
@@ -664,6 +924,29 @@ functions.
 
     TransmitLogMessage(base64_buffer, base64_size);
   }
+
+Command line utilities
+^^^^^^^^^^^^^^^^^^^^^^
+``pw_tokenizer`` provides two standalone command line utilities for detokenizing
+Base64-encoded tokenized strings.
+
+* ``detokenize.py`` -- Detokenizes Base64-encoded strings in files or from
+  stdin.
+* ``serial_detokenizer.py`` -- Detokenizes Base64-encoded strings from a
+  connected serial device.
+
+If the ``pw_tokenizer`` Python package is installed, these tools may be executed
+as runnable modules. For example:
+
+.. code-block::
+
+  # Detokenize Base64-encoded strings in a file
+  python -m pw_tokenizer.detokenize -i input_file.txt
+
+  # Detokenize Base64-encoded strings in output from a serial device
+  python -m pw_tokenizer.serial_detokenizer --device /dev/ttyACM0
+
+See the ``--help`` options for these tools for full usage information.
 
 Deployment war story
 ====================
@@ -701,7 +984,7 @@ Firmware deployment
   * The log level was passed as the payload argument to facilitate runtime log
     level control.
   * For this project, it was necessary to encode the log messages as text. In
-    ``pw_TokenizerHandleEncodedMessageWithPayload``, the log messages were
+    ``pw_tokenizer_HandleEncodedMessageWithPayload``, the log messages were
     encoded in the $-prefixed `Base64 format`_, then dispatched as normal log
     messages.
   * Asserts were tokenized using ``PW_TOKENIZE_TO_CALLBACK``.
@@ -709,8 +992,9 @@ Firmware deployment
 .. attention::
   Do not encode line numbers in tokenized strings. This results in a huge
   number of lines being added to the database, since every time code moves,
-  new strings are tokenized. If line numbers are desired in a tokenized
-  string, add a ``"%d"`` to the string and pass ``__LINE__`` as an argument.
+  new strings are tokenized. If :ref:`module-pw_log_tokenized` is used, line
+  numbers are encoded in the log metadata. Line numbers may also be included by
+  by adding ``"%d"`` to the format string and passing ``__LINE__``.
 
 Database management
 -------------------
@@ -753,7 +1037,7 @@ Decoding tooling deployment
   * Provide simple wrapper shell scripts that fill in arguments for the
     project. For example, point ``detokenize.py`` to the project's token
     databases.
-  * Use ``pw_tokenizer.AutoReloadingDetokenizer`` to decode in
+  * Use ``pw_tokenizer.AutoUpdatingDetokenizer`` to decode in
     continuously-running tools, so that users don't have to restart the tool
     when the token database updates.
   * Integrate detokenization everywhere it is needed. Integrating the tools
@@ -793,7 +1077,7 @@ device performed the tokenization.
 Supporting detokenization of strings tokenized on 64-bit targets would be
 simple. This could be done by adding an option to switch the 32-bit types to
 64-bit. The tokenizer stores the sizes of these types in the
-``.pw_tokenizer_info`` ELF section, so the sizes of these types can be verified
+``.pw_tokenizer.info`` ELF section, so the sizes of these types can be verified
 by checking the ELF file, if necessary.
 
 Tokenization in headers
@@ -834,10 +1118,33 @@ Another possibility: encode strings with arguments to a ``uint64_t`` and send
 them as an integer. This would be efficient and simple, but only support a small
 number of arguments.
 
+Legacy tokenized string ELF format
+==================================
+The original version of ``pw_tokenizer`` stored tokenized stored as plain C
+strings in the ELF file instead of structured tokenized string entries. Strings
+in different domains were stored in different linker sections. The Python script
+that parsed the ELF file would re-calculate the tokens.
+
+In the current version of ``pw_tokenizer``, tokenized strings are stored in a
+structured entry containing a token, domain, and length-delimited string. This
+has several advantages over the legacy format:
+
+* The Python script does not have to recalculate the token, so any hash
+  algorithm may be used in the firmware.
+* In C++, the tokenization hash no longer has a length limitation.
+* Strings with null terminators in them are properly handled.
+* Only one linker section is required in the linker script, instead of a
+  separate section for each domain.
+
+To migrate to the new format, all that is required is update the linker sections
+to match those in ``pw_tokenizer_linker_sections.ld``. Replace all
+``pw_tokenized.<DOMAIN>`` sections with one ``pw_tokenizer.entries`` section.
+The Python tooling continues to support the legacy tokenized string ELF format.
+
 Compatibility
 =============
   * C11
-  * C++11
+  * C++14
   * Python 3
 
 Dependencies

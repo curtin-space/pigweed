@@ -1,4 +1,4 @@
-# Copyright 2020 The Pigweed Authors
+# Copyright 2021 The Pigweed Authors
 #
 # Licensed under the Apache License, Version 2.0 (the "License"); you may not
 # use this file except in compliance with the License. You may obtain a copy of
@@ -12,50 +12,129 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
-# gn-format disable
 import("//build_overrides/pigweed.gni")
 
 import("$dir_pw_build/facade.gni")
 import("$dir_pw_docgen/docs.gni")
 import("$dir_pw_unit_test/test.gni")
+
 declare_args() {
   # Backend for the pw_assert module.
   pw_assert_BACKEND = ""
 }
 
-config("default_config") {
+config("public_include_path") {
   include_dirs = [ "public" ]
+  visibility = [ ":*" ]
 }
 
-pw_facade("pw_assert") {
+# Depending on dir_pw_assert provides both assert and check.
+group("pw_assert") {
+  public_deps = [
+    ":assert",
+    ":check",
+  ]
+}
+
+# Wrap :pw_assert with facade-style targets, so it can be used as if it were
+# created with pw_facade.
+group("facade") {
+  public_deps = [
+    ":assert",
+    ":check.facade",
+  ]
+}
+
+group("pw_assert.facade") {
+  public_deps = [ ":facade" ]
+}
+
+# Provides the rich PW_CHECK macros.
+pw_facade("check") {
   backend = pw_assert_BACKEND
-  public_configs = [ ":default_config" ]
+  public_configs = [ ":public_include_path" ]
+  public = [
+    "public/pw_assert/check.h",
+    "public/pw_assert/internal/check_impl.h",
+    "public/pw_assert/options.h",
+    "public/pw_assert/short.h",
+  ]
+  public_deps = [ dir_pw_preprocessor ]
+
+  require_link_deps = [ ":impl" ]
+}
+
+# Provide "pw_assert/assert.h" in its own source set, so it can be used without
+# depending on pw_assert_BACKEND. This makes it possible to use PW_ASSERT in
+# situations that might result in circular dependencies, such as in low-level
+# headers like polyfill or span. See the docs for more discussion around where
+# to use which assert headers.
+#
+# The implementation function pw_assert_HandleFailure() must be provided at link
+# time. It is linked by the pw_assert:pw_assert (or pw_assert:check) targets.
+pw_source_set("assert") {
+  public_configs = [ ":public_include_path" ]
   public = [
     "public/pw_assert/assert.h",
-    "public/pw_assert/internal/assert_impl.h",
+
+    # Needed for PW_ASSERT_ENABLE_DEBUG. Note that depending on :pw_assert to
+    # get options.h won't work here since it will trigger the circular include
+    # problem that the :assert target is intended solve.
+    "public/pw_assert/options.h",
   ]
   public_deps = [ dir_pw_preprocessor ]
 }
 
+# pw_assert is low-level and ubiquitous. Because of this, it can often cause
+# circular dependencies. This target collects dependencies from the backend that
+# cannot be used because they would cause circular deps.
+#
+# This group ("$dir_pw_assert:impl") must listed in pw_build_LINK_DEPS if
+# pw_assert_BACKEND is set.
+#
+# pw_assert backends must provide their own "impl" target that collects their
+# actual dependencies. The backend "impl" group may be empty if everything can
+# go directly in the backend target without causing circular dependencies.
+group("impl") {
+  public_deps = []
+
+  if (pw_assert_BACKEND != "") {
+    public_deps +=
+        [ get_label_info(pw_assert_BACKEND, "label_no_toolchain") + ".impl" ]
+  }
+}
+
+# Note: While this is technically a test, doesn't verify any of the output and
+# is more of a compile test. The results can be visually verified if desired.
+pw_test("assert_test") {
+  configs = [ ":public_include_path" ]
+  sources = [ "assert_test.cc" ]
+  deps = [ ":pw_assert" ]
+}
+
 pw_test_group("tests") {
   tests = [
+    ":assert_test",
     ":assert_backend_compile_test",
     ":assert_facade_test",
   ]
 }
 
 # The assert facade test doesn't require a backend since a fake one is
-# provided.  However, since this doesn't depend on the backend it re-includes
+# provided. However, since this doesn't depend on the backend it re-includes
 # the facade headers.
 pw_test("assert_facade_test") {
-  configs = [ ":default_config" ]  # For internal/assert_impl.h
+  configs = [ ":public_include_path" ]  # For internal/assert_impl.h
   sources = [
     "assert_facade_test.cc",
     "fake_backend.cc",
-    "public/pw_assert/internal/assert_impl.h",
+    "public/pw_assert/internal/check_impl.h",
     "pw_assert_test/fake_backend.h",
   ]
-  deps = [ dir_pw_status ]
+  deps = [
+    ":assert",
+    dir_pw_status,
+  ]
 
   # TODO(frolv): Fix this test on the QEMU target.
   enable_if = pw_build_EXECUTABLE_TARGET_TYPE != "lm3s6965evb_executable"

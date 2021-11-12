@@ -80,8 +80,8 @@ def _add_programs_arguments(exclusive: argparse.ArgumentParser,
             if values not in all_steps:
                 raise parser.error(
                     f'argument --step: {values} is not the name of a '
-                    'presubmit check\n\n'
-                    f'Valid values for --step:\n{{{",".join(all_steps)}}}')
+                    'presubmit check\n\nValid values for --step:\n'
+                    f'{{{",".join(sorted(all_steps))}}}')
 
             namespace.program.append(all_steps[values])
 
@@ -108,6 +108,11 @@ def add_arguments(parser: argparse.ArgumentParser,
         type=Path,
         help='Output directory (default: <repo root>/.presubmit)',
     )
+    parser.add_argument(
+        '--package-root',
+        type=Path,
+        help='Package root directory (default: <output directory>/packages)',
+    )
 
     exclusive = parser.add_mutually_exclusive_group()
     exclusive.add_argument(
@@ -123,25 +128,38 @@ def add_arguments(parser: argparse.ArgumentParser,
 
         _add_programs_arguments(parser, programs, default)
 
+        # LUCI builders extract the list of steps from the program and run them
+        # individually for a better UX in MILO.
+        parser.add_argument(
+            '--only-list-steps',
+            action='store_true',
+            help=argparse.SUPPRESS,
+        )
+
 
 def run(
-        program: Sequence[Callable],
-        output_directory: Path,
-        clear: bool,
-        root: Path = None,
-        repositories: Collection[Path] = (),
-        **other_args,
+    program: Sequence[Callable],
+    output_directory: Optional[Path],
+    package_root: Path,
+    clear: bool,
+    root: Path = None,
+    repositories: Collection[Path] = (),
+    only_list_steps=False,
+    **other_args,
 ) -> int:
     """Processes arguments from add_arguments and runs the presubmit.
 
     Args:
+      program: from the --program option
+      output_directory: from --output-directory option
+      package_root: from --package-root option
+      clear: from the --clear option
       root: base path from which to run presubmit checks; defaults to the root
           of the current directory's repository
       repositories: roots of Git repositories on which to run presubmit checks;
           defaults to the root of the current directory's repository
-      program: from the --program option
-      output_directory: from --output-directory option
-      clear: from the --clear option
+      only_list_steps: list the steps that would be executed, one per line,
+          instead of executing them
       **other_args: remaining arguments defined by by add_arguments
 
     Returns:
@@ -153,8 +171,11 @@ def run(
     if not repositories:
         repositories = [root]
 
-    if not output_directory:
+    if output_directory is None:
         output_directory = root / '.presubmit'
+
+    if not package_root:
+        package_root = output_directory / 'packages'
 
     _LOG.debug('Using environment at %s', output_directory)
 
@@ -170,7 +191,9 @@ def run(
     if presubmit.run(program,
                      root,
                      repositories,
+                     only_list_steps=only_list_steps,
                      output_directory=output_directory,
+                     package_root=package_root,
                      **other_args):
         return 0
 

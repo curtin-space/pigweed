@@ -12,7 +12,6 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
-# gn-format disable
 import("//build_overrides/pigweed.gni")
 
 import("$dir_pw_toolchain/host_clang/toolchains.gni")
@@ -27,33 +26,47 @@ import("$dir_pw_unit_test/test.gni")
 #   https://llvm.org/docs/LibFuzzer.html
 #
 template("pw_fuzzer") {
-  # This currently is ONLY supported on Linux using clang (debug).
-  # TODO(pwbug/179): Add Darwin, Windows here after testing.
-  fuzzing_platforms = [ "linux" ]
+  # This currently is ONLY supported on Linux and Mac using clang (debug).
+  # TODO(pwbug/179): Add Windows here after testing.
+  fuzzing_platforms = [
+    "linux",
+    "mac",
+  ]
+
   fuzzing_toolchains =
-      [ get_path_info("$dir_pw_toolchain:host_clang_og", "abspath") ]
+      [ get_path_info("$dir_pigweed/targets/host:host_clang_fuzz", "abspath") ]
 
   # This is how GN says 'elem in list':
   can_fuzz = fuzzing_platforms + [ host_os ] - [ host_os ] != fuzzing_platforms
+
   can_fuzz = fuzzing_toolchains + [ current_toolchain ] -
              [ current_toolchain ] != fuzzing_toolchains && can_fuzz
-  if (can_fuzz && pw_sanitizer != "") {
+
+  if (can_fuzz && pw_toolchain_SANITIZERS != []) {
     # Build the actual fuzzer using the fuzzing config.
     pw_executable(target_name) {
       forward_variables_from(invoker, "*", [ "visibility" ])
       forward_variables_from(invoker, [ "visibility" ])
+
+      if (!defined(deps)) {
+        deps = []
+      }
+      deps += [ dir_pw_fuzzer ]
+
       if (!defined(configs)) {
         configs = []
       }
-      configs += [
-        "$dir_pw_fuzzer:default_config",
-        "$dir_pw_fuzzer:sanitize_${pw_sanitizer}",
-      ]
-      if (oss_fuzz_enabled) {
+      if (pw_toolchain_OSS_FUZZ_ENABLED) {
         configs += [ "$dir_pw_fuzzer:oss_fuzz" ]
       } else {
         configs += [ "$dir_pw_fuzzer:fuzzing" ]
       }
+
+      _fuzzer_output_dir = "${target_out_dir}/bin"
+      if (defined(invoker.output_dir)) {
+        _fuzzer_output_dir = invoker.output_dir
+      }
+      output_dir = _fuzzer_output_dir
 
       # Metadata for this fuzzer when used as part of a pw_test_group target.
       metadata = {
@@ -61,15 +74,20 @@ template("pw_fuzzer") {
           {
             type = "fuzzer"
             test_name = target_name
-            test_directory = rebase_path(target_out_dir, root_build_dir)
+            test_directory = rebase_path(output_dir, root_build_dir)
           },
         ]
       }
     }
 
-    # Dummy target to satisfy `pw_test_group`. It is empty as we don't want to
+    # No-op target to satisfy `pw_test_group`. It is empty as we don't want to
     # automatically run fuzzers.
-    group(target_name + "_run") {
+    group(target_name + ".run") {
+    }
+
+    # No-op target to satisfy `pw_test`. It is empty as we don't need a separate
+    # lib target.
+    group(target_name + ".lib") {
     }
   } else {
     # Build a unit test that exercise the fuzz target function.

@@ -13,10 +13,20 @@
 # the License.
 include_guard(GLOBAL)
 
-# Create an empty, dummy source file for use by non-INTERFACE libraries, which
-# require at least one source file.
-set(_pw_empty_source_file "${CMAKE_BINARY_DIR}/pw_empty_source_file.cc")
-file(WRITE "${_pw_empty_source_file}" "")
+# Wrapper around cmake_parse_arguments that fails with an error if any arguments
+# remained unparsed.
+macro(_pw_parse_argv_strict function start_arg options one multi)
+  cmake_parse_arguments(PARSE_ARGV
+      "${start_arg}" arg "${options}" "${one}" "${multi}"
+  )
+  if(NOT "${arg_UNPARSED_ARGUMENTS}" STREQUAL "")
+    set(_all_args ${options} ${one} ${multi})
+    message(FATAL_ERROR
+        "Unexpected arguments to ${function}: ${arg_UNPARSED_ARGUMENTS}\n"
+        "Valid arguments: ${_all_args}"
+    )
+  endif()
+endmacro()
 
 # Automatically creates a library and test targets for the files in a module.
 # This function is only suitable for simple modules that meet the following
@@ -43,30 +53,37 @@ file(WRITE "${_pw_empty_source_file}" "")
 #   3. Declare a test for each source file that ends with _test.cc.
 #
 # Args:
-#   IMPLEMENTS_FACADE: this module implements the specified facade
-#   PUBLIC_DEPS: public target_link_libraries arguments
-#   PRIVATE_DEPS: private target_link_libraries arguments
+#
+#   IMPLEMENTS_FACADE - this module implements the specified facade
+#   PUBLIC_DEPS - public target_link_libraries arguments
+#   PRIVATE_DEPS - private target_link_libraries arguments
 #
 function(pw_auto_add_simple_module MODULE)
-  set(multi PUBLIC_DEPS PRIVATE_DEPS)
-  cmake_parse_arguments(PARSE_ARGV 1 arg "" "IMPLEMENTS_FACADE" "${multi}")
+  _pw_parse_argv_strict(pw_auto_add_simple_module 1
+      ""
+      "IMPLEMENTS_FACADE"
+      "PUBLIC_DEPS;PRIVATE_DEPS;TEST_DEPS"
+  )
 
   file(GLOB all_sources *.cc *.c)
 
   # Create a library with all source files not ending in _test.
   set(sources "${all_sources}")
-  list(FILTER sources EXCLUDE REGEX "_test.cc$")
+  list(FILTER sources EXCLUDE REGEX "_test(\\.cc|(_c)?\\.c)$")  # *_test.cc
+  list(FILTER sources EXCLUDE REGEX "^test(\\.cc|(_c)?\\.c)$")  # test.cc
+  list(FILTER sources EXCLUDE REGEX "_fuzzer\\.cc$")
 
   file(GLOB_RECURSE headers *.h)
 
   if(arg_IMPLEMENTS_FACADE)
     set(groups backends)
-    set(deps PUBLIC_DEPS "${arg_IMPLEMENTS_FACADE}.facade")
   else()
     set(groups modules "${MODULE}")
   endif()
 
   pw_add_module_library("${MODULE}"
+    IMPLEMENTS_FACADES
+      ${arg_IMPLEMENTS_FACADE}
     PUBLIC_DEPS
       ${arg_PUBLIC_DEPS}
     PRIVATE_DEPS
@@ -75,50 +92,83 @@ function(pw_auto_add_simple_module MODULE)
       ${sources}
     HEADERS
       ${headers}
-    ${deps}
   )
 
-  # Create a test for each source file ending in _test. Tests with mutliple .cc
-  # files or different dependencies than the module will not work correctly.
-  set(tests "${all_sources}")
-  list(FILTER tests INCLUDE REGEX "_test.cc$")
+  if(arg_IMPLEMENTS_FACADE)
+    target_include_directories("${MODULE}" PUBLIC public_overrides)
+  endif()
 
-  foreach(test IN LISTS tests)
+  pw_auto_add_module_tests("${MODULE}"
+    PRIVATE_DEPS
+      ${arg_PUBLIC_DEPS}
+      ${arg_PRIVATE_DEPS}
+      ${arg_TEST_DEPS}
+    GROUPS
+      ${groups}
+  )
+endfunction(pw_auto_add_simple_module)
+
+# Creates a test for each source file ending in _test. Tests with mutliple .cc
+# files or different dependencies than the module will not work correctly.
+#
+# Args:
+#
+#  PRIVATE_DEPS - dependencies to apply to all tests
+#  GROUPS - groups in addition to MODULE to which to add these tests
+#
+function(pw_auto_add_module_tests MODULE)
+  _pw_parse_argv_strict(pw_auto_add_module_tests 1
+      ""
+      ""
+      "PRIVATE_DEPS;GROUPS"
+  )
+
+  file(GLOB cc_tests *_test.cc)
+
+  foreach(test IN LISTS cc_tests)
     get_filename_component(test_name "${test}" NAME_WE)
 
     # Find a .c test corresponding with the test .cc file, if any.
-    list(FILTER c_test INCLUDE REGEX "^${test_name}.c$")
+    file(GLOB c_test "${test_name}.c" "${test_name}_c.c")
 
     pw_add_test("${MODULE}.${test_name}"
       SOURCES
         "${test}"
         ${c_test}
       DEPS
-        "${MODULE}"
-        ${arg_PUBLIC_DEPS}
+        "$<TARGET_NAME_IF_EXISTS:${MODULE}>"
         ${arg_PRIVATE_DEPS}
       GROUPS
-        "${groups}"
+        "${MODULE}"
+        ${arg_GROUPS}
     )
   endforeach()
-endfunction(pw_auto_add_simple_module)
+endfunction(pw_auto_add_module_tests)
+
+# Sets the provided variable to the common library arguments.
+macro(_pw_library_args variable)
+  set("${variable}" SOURCES HEADERS PUBLIC_DEPS PRIVATE_DEPS ${ARGN})
+endmacro()
 
 # Creates a library in a module. The library has access to the public/ include
 # directory.
 #
 # Args:
-#   SOURCES: source files for this library
-#   HEADERS: header files for this library
-#   PUBLIC_DEPS: public target_link_libraries arguments
-#   PRIVATE_DEPS: private target_link_libraries arguments
+#
+#   SOURCES - source files for this library
+#   HEADERS - header files for this library
+#   PUBLIC_DEPS - public target_link_libraries arguments
+#   PRIVATE_DEPS - private target_link_libraries arguments
+#   IMPLEMENTS_FACADES - which facades this library implements
+#
 function(pw_add_module_library NAME)
-  set(list_args SOURCES HEADERS PUBLIC_DEPS PRIVATE_DEPS)
-  cmake_parse_arguments(PARSE_ARGV 1 arg "" "" "${list_args}")
+  _pw_library_args(list_args IMPLEMENTS_FACADES)
+  _pw_parse_argv_strict(pw_add_module_library 1 "" "" "${list_args}")
 
   # Check that the library's name is prefixed by the module name.
   get_filename_component(module "${CMAKE_CURRENT_SOURCE_DIR}" NAME)
 
-  if(NOT "${NAME}" MATCHES "^${module}(\\.[^\\.]+)?(\\.facade|\\.backend)?$")
+  if(NOT "${NAME}" MATCHES "${module}(\\.[^\\.]+)?(\\.facade)?$")
     message(FATAL_ERROR
         "Module libraries must match the module name or be in the form "
         "'MODULE_NAME.LIBRARY_NAME'. The library '${NAME}' does not match."
@@ -126,18 +176,27 @@ function(pw_add_module_library NAME)
   endif()
 
   add_library("${NAME}" EXCLUDE_FROM_ALL ${arg_HEADERS} ${arg_SOURCES})
-  target_include_directories("${NAME}" PUBLIC public/)
+  target_include_directories("${NAME}" PUBLIC public)
   target_link_libraries("${NAME}"
     PUBLIC
       pw_build
       ${arg_PUBLIC_DEPS}
     PRIVATE
+      pw_build.strict_warnings
+      pw_build.extra_strict_warnings
       ${arg_PRIVATE_DEPS}
   )
 
+  if(NOT "${arg_IMPLEMENTS_FACADES}" STREQUAL "")
+    target_include_directories("${NAME}" PUBLIC public_overrides)
+    set(facades ${arg_IMPLEMENTS_FACADES})
+    list(TRANSFORM facades APPEND ".facade")
+    target_link_libraries("${NAME}" PUBLIC ${facades})
+  endif()
+
   # Libraries require at least one source file.
   if(NOT arg_SOURCES)
-    target_sources("${NAME}" PRIVATE "${_pw_empty_source_file}")
+    target_sources("${NAME}" PRIVATE $<TARGET_PROPERTY:pw_build.empty,SOURCES>)
   endif()
 endfunction(pw_add_module_library)
 
@@ -148,33 +207,85 @@ endfunction(pw_add_module_library)
 # module that implements the facade depends on a library named
 # MODULE_NAME.facade.
 #
-# pw_add_facade accepts the same arguments as pw_add_module_library.
+# pw_add_facade accepts the same arguments as pw_add_module_library, except for
+# IMPLEMENTS_FACADES. It also accepts the following argument:
+#
+#  DEFAULT_BACKEND - which backend to use by default
+#
 function(pw_add_facade NAME)
-  pw_add_module_library("${NAME}.facade" ${ARGN})
+  _pw_library_args(list_args)
+  _pw_parse_argv_strict(pw_add_facade 1 "" "DEFAULT_BACKEND" "${list_args}")
 
-  # Use a library with an empty source instead of an INTERFACE library so that
-  # the library can have a private dependency on the backend.
-  add_library("${NAME}" OBJECT EXCLUDE_FROM_ALL "${_pw_empty_source_file}")
-  target_link_libraries("${NAME}"
-    PUBLIC
+  # If no backend is set, a script that displays an error message is used
+  # instead. If the facade is used in the build, it fails with this error.
+  add_custom_target("${NAME}._no_backend_set_message"
+    COMMAND
+      "${CMAKE_COMMAND}" -E echo
+        "ERROR: Attempted to build the ${NAME} facade with no backend."
+        "Configure the ${NAME} backend using pw_set_backend or remove all dependencies on it."
+        "See https://pigweed.dev/pw_build."
+    COMMAND
+      "${CMAKE_COMMAND}" -E false
+  )
+  add_library("${NAME}.NO_BACKEND_SET" INTERFACE)
+  add_dependencies("${NAME}.NO_BACKEND_SET" "${NAME}._no_backend_set_message")
+
+  # Set the default backend to the error message if no default is specified.
+  if("${arg_DEFAULT_BACKEND}" STREQUAL "")
+    set(arg_DEFAULT_BACKEND "${NAME}.NO_BACKEND_SET")
+  endif()
+
+  # Declare the backend variable for this facade.
+  set("${NAME}_BACKEND" "${arg_DEFAULT_BACKEND}" CACHE STRING
+      "Backend for ${NAME}")
+
+  # This target is never used; it simply tests that the specified backend
+  # actually exists in the build. The generator expression will fail to evaluate
+  # if the target is not defined.
+  add_custom_target(_pw_check_that_backend_for_${NAME}_is_defined
+    COMMAND
+      ${CMAKE_COMMAND} -E echo "$<TARGET_PROPERTY:${${NAME}_BACKEND},TYPE>"
+  )
+
+  # Define the facade library, which is used by the backend to avoid circular
+  # dependencies.
+  add_library("${NAME}.facade" INTERFACE)
+  target_include_directories("${NAME}.facade" INTERFACE public)
+  target_link_libraries("${NAME}.facade" INTERFACE ${arg_PUBLIC_DEPS})
+
+  # Define the public-facing library for this facade, which depends on the
+  # header files in .facade target and exposes the dependency on the backend.
+  pw_add_module_library("${NAME}"
+    SOURCES
+      ${arg_SOURCES}
+    HEADERS
+      ${arg_HEADERS}
+    PUBLIC_DEPS
       "${NAME}.facade"
-      "${NAME}.backend"
+      "${${NAME}_BACKEND}"
   )
 endfunction(pw_add_facade)
 
+# Sets which backend to use for the given facade.
+function(pw_set_backend FACADE BACKEND)
+  set("${FACADE}_BACKEND" "${BACKEND}" CACHE STRING "Backend for ${NAME}" FORCE)
+endfunction(pw_set_backend)
+
 # Declares a unit test. Creates two targets:
 #
-#  - <TEST_NAME>: the test executable
-#  - <TEST_NAME>_run: builds and runs the test
+#  * <TEST_NAME> - the test executable
+#  * <TEST_NAME>.run - builds and runs the test
 #
 # Args:
+#
 #   NAME: name to use for the target
 #   SOURCES: source files for this test
 #   DEPS: libraries on which this test depends
 #   GROUPS: groups to which to add this test; if none are specified, the test is
-#       added to the default and all groups
+#       added to the 'default' and 'all' groups
+#
 function(pw_add_test NAME)
-  cmake_parse_arguments(PARSE_ARGV 1 arg "" "" "SOURCES;DEPS;GROUPS")
+  _pw_parse_argv_strict(pw_add_test 1 "" "" "SOURCES;DEPS;GROUPS")
 
   add_executable("${NAME}" EXCLUDE_FROM_ALL ${arg_SOURCES})
   target_link_libraries("${NAME}"
@@ -199,7 +310,7 @@ function(pw_add_test NAME)
     OUTPUT
       "${NAME}.stamp"
   )
-  add_custom_target("${NAME}_run" DEPENDS "${NAME}.stamp")
+  add_custom_target("${NAME}.run" DEPENDS "${NAME}.stamp")
 
   # Always add tests to the "all" group. If no groups are provided, add the
   # test to the "default" group.
@@ -224,60 +335,6 @@ function(pw_add_test_to_groups TEST_NAME)
     endif()
 
     add_dependencies("pw_tests.${group}" "${TEST_NAME}")
-    add_dependencies("pw_run_tests.${group}" "${TEST_NAME}_run")
+    add_dependencies("pw_run_tests.${group}" "${TEST_NAME}.run")
   endforeach()
 endfunction(pw_add_test_to_groups)
-
-# Declare top-level targets for tests.
-add_custom_target(pw_tests.default)
-add_custom_target(pw_run_tests.default)
-
-add_custom_target(pw_tests DEPENDS pw_tests.default)
-add_custom_target(pw_run_tests DEPENDS pw_run_tests.default)
-
-# Define the standard Pigweed compile options.
-add_library(_pw_reduced_size_copts INTERFACE)
-target_compile_options(_pw_reduced_size_copts
-  INTERFACE
-    "-fno-common"
-    "-fno-exceptions"
-    "-ffunction-sections"
-    "-fdata-sections"
-    $<$<COMPILE_LANGUAGE:CXX>:-fno-rtti>
-)
-
-add_library(_pw_strict_warnings_copts INTERFACE)
-target_compile_options(_pw_strict_warnings_copts
-  INTERFACE
-    "-Wall"
-    "-Wextra"
-    # Make all warnings errors, except for the exemptions below.
-    "-Werror"
-    "-Wno-error=cpp"  # preprocessor #warning statement
-    "-Wno-error=deprecated-declarations"  # [[deprecated]] attribute
-    $<$<COMPILE_LANGUAGE:CXX>:-Wnon-virtual-dtor>
-)
-
-add_library(_pw_cpp17_copts INTERFACE)
-target_compile_options(_pw_cpp17_copts
-  INTERFACE
-    $<$<COMPILE_LANGUAGE:CXX>:-std=c++17>
-    # Allow uses of the register keyword, which may appear in C headers.
-    $<$<COMPILE_LANGUAGE:CXX>:-Wno-register>
-)
-
-# Target that specifies the standard Pigweed build options.
-add_library(pw_build INTERFACE)
-target_compile_options(pw_build INTERFACE "-g")
-target_link_libraries(pw_build
-  INTERFACE
-    _pw_reduced_size_copts
-    _pw_strict_warnings_copts
-    _pw_cpp17_copts
-)
-target_compile_options(pw_build
-  INTERFACE
-    # Force the compiler use colorized output. This is required for Ninja.
-    $<$<CXX_COMPILER_ID:Clang>:-fcolor-diagnostics>
-    $<$<CXX_COMPILER_ID:GNU>:-fdiagnostics-color=always>
-)

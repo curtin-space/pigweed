@@ -12,81 +12,55 @@
 // License for the specific language governing permissions and limitations under
 // the License.
 
-#include "pw_rpc/internal/method.h"
+#include "pw_rpc/nanopb/internal/method.h"
 
 #include "pb_decode.h"
 #include "pb_encode.h"
+#include "pw_log/log.h"
+#include "pw_rpc/internal/packet.h"
 
-namespace pw::rpc::internal {
-namespace {
+namespace pw::rpc {
 
-// Nanopb 3 uses pb_field_s and Nanopb 4 uses pb_msgdesc_s for fields. The
-// Nanopb version macro is difficult to use, so deduce the correct type from the
-// pb_decode function.
-template <typename DecodeFunction>
-struct NanopbTraits;
+namespace internal {
 
-template <typename FieldsType>
-struct NanopbTraits<bool(pb_istream_t*, FieldsType, void*)> {
-  using Fields = FieldsType;
-};
-
-using Fields = typename NanopbTraits<decltype(pb_decode)>::Fields;
-
-}  // namespace
-
-using std::byte;
-
-Status Method::DecodeRequest(span<const byte> buffer,
-                             void* proto_struct) const {
-  auto input = pb_istream_from_buffer(
-      reinterpret_cast<const pb_byte_t*>(buffer.data()), buffer.size());
-  return pb_decode(&input, static_cast<Fields>(request_fields_), proto_struct)
-             ? Status::OK
-             : Status::INTERNAL;
-}
-
-StatusWithSize Method::EncodeResponse(const void* proto_struct,
-                                      span<byte> buffer) const {
-  auto output = pb_ostream_from_buffer(
-      reinterpret_cast<pb_byte_t*>(buffer.data()), buffer.size());
-  if (pb_encode(&output, static_cast<Fields>(response_fields_), proto_struct)) {
-    return StatusWithSize(output.bytes_written);
-  }
-  return StatusWithSize::INTERNAL;
-}
-
-StatusWithSize Method::CallUnary(ServerCall& call,
-                                 span<const byte> request_buffer,
-                                 span<byte> response_buffer,
-                                 void* request_struct,
-                                 void* response_struct) const {
-  Status status = DecodeRequest(request_buffer, request_struct);
-  if (!status.ok()) {
-    return StatusWithSize(status, 0);
+void NanopbMethod::CallSynchronousUnary(const CallContext& context,
+                                        const Packet& request,
+                                        void* request_struct,
+                                        void* response_struct) const {
+  if (!DecodeRequest(context.channel(), request, request_struct)) {
+    return;
   }
 
-  status = function_.unary(call.context(), request_struct, response_struct);
-
-  StatusWithSize encoded = EncodeResponse(response_struct, response_buffer);
-  if (encoded.ok()) {
-    return StatusWithSize(status, encoded.size());
-  }
-  return encoded;
+  NanopbServerCall responder(context, MethodType::kUnary);
+  const Status status = function_.synchronous_unary(
+      context.service(), request_struct, response_struct);
+  responder.SendUnaryResponse(response_struct, status).IgnoreError();
 }
 
-StatusWithSize Method::CallServerStreaming(ServerCall& call,
-                                           span<const byte> request_buffer,
-                                           void* request_struct) const {
-  Status status = DecodeRequest(request_buffer, request_struct);
-  if (!status.ok()) {
-    return StatusWithSize(status, 0);
+void NanopbMethod::CallUnaryRequest(const CallContext& context,
+                                    MethodType type,
+                                    const Packet& request,
+                                    void* request_struct) const {
+  if (!DecodeRequest(context.channel(), request, request_struct)) {
+    return;
   }
 
-  internal::BaseServerWriter server_writer(call);
-  return StatusWithSize(
-      function_.server_streaming(call.context(), request_struct, server_writer),
-      0);
+  NanopbServerCall server_writer(context, type);
+  function_.unary_request(context.service(), request_struct, server_writer);
 }
 
-}  // namespace pw::rpc::internal
+bool NanopbMethod::DecodeRequest(Channel& channel,
+                                 const Packet& request,
+                                 void* proto_struct) const {
+  if (serde_.DecodeRequest(request.payload(), proto_struct)) {
+    return true;
+  }
+
+  PW_LOG_WARN("Nanopb failed to decode request payload from channel %u",
+              unsigned(channel.id()));
+  channel.Send(Packet::ServerError(request, Status::DataLoss()));
+  return false;
+}
+
+}  // namespace internal
+}  // namespace pw::rpc

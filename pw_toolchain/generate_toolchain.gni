@@ -12,13 +12,21 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
-# gn-format disable
 import("//build_overrides/pigweed.gni")
+
+import("$dir_pw_toolchain/static_analysis_toolchain.gni")
+import("$dir_pw_toolchain/universal_tools.gni")
+
 declare_args() {
   # Scope defining the current toolchain. Contains all of the arguments required
-  # by the generate_toolchain template.
+  # by the generate_toolchain template. This should NOT be manually modified.
   pw_toolchain_SCOPE = {
   }
+
+  # Prefix for compilation commands (e.g. the path to a Goma or CCache compiler
+  # launcher). Example for ccache:
+  #   gn gen out --args='pw_command_launcher="ccache"'
+  pw_command_launcher = ""
 }
 
 # Creates a toolchain target.
@@ -29,20 +37,68 @@ declare_args() {
 #   cxx: (required) String indicating the C++ compiler to use.
 #   is_host_toolchain: (optional) Boolean indicating if the outputs are meant
 #     for the $host_os.
+#   final_binary_extension: (optional) The extension to apply to final linked
+#     binaries.
 #   link_whole_archive: (optional) Boolean indicating if the linker should load
 #     all object files when resolving symbols.
-#   defaults: (required) A scope setting defaults to apply to GN
-#     targets in this toolchain, as described in pw_vars_default.gni
+#   link_group: (optional) Boolean indicating if the linker should use
+#     a group to resolve circular dependencies between artifacts.
+#   generate_from: (optional) The full target name of the toolchain that can
+#     trigger this toolchain to be generated. GN only allows one toolchain to
+#     be generated at a given target path, so if multiple toolchains parse the
+#     same generate_toolchain target only one should declare a toolchain. This
+#     is primarily to allow generating sub-toolchains. Defaults to
+#     default_toolchain.
+#   defaults: (required) A scope setting GN build arg values to apply to GN
+#     targets in this toolchain. These take precedence over args.gni settings.
 #
+# The defaults scope should contain values for builtin GN arguments:
+#   current_cpu: The CPU of the toolchain.
+#     Well known values include "arm", "arm64", "x64", "x86", and "mips".
+#   current_os: The OS of the toolchain. Defaults to "".
+#     Well known values include "win", "mac", "linux", "android", and "ios".
+#
+# TODO(pwbug/333): This should be renamed to pw_generate_toolchain.
 template("generate_toolchain") {
-  # In multi-toolchain builds from the top level, we run into issues where
-  # toolchains defined with this template are re-generated each time. To avoid
-  # collisions, the actual toolchain is only generated for the default (dummy)
-  # toolchain, and an unused target is created otherwise.
-  if (current_toolchain == default_toolchain) {
+  assert(defined(invoker.defaults), "toolchain is missing 'defaults'")
+
+  # On the default toolchain invocation, you typically need to generate all
+  # toolchains you encounter. For sub-toolchains, they must be generated from
+  # the context of their parent.
+  if (defined(invoker.generate_from)) {
+    _generate_toolchain =
+        get_label_info(invoker.generate_from, "label_no_toolchain") ==
+        current_toolchain
+  } else {
+    _generate_toolchain = default_toolchain == current_toolchain
+  }
+
+  if (_generate_toolchain) {
+    # TODO(amontanez): This should be renamed to build_args as "defaults" isn't
+    # sufficiently descriptive.
+    invoker_toolchain_args = invoker.defaults
+
+    # These values should always be set as they influence toolchain
+    # behavior, but allow them to be unset as a transitional measure.
+    if (!defined(invoker_toolchain_args.current_cpu)) {
+      invoker_toolchain_args.current_cpu = ""
+    }
+    if (!defined(invoker_toolchain_args.current_os)) {
+      invoker_toolchain_args.current_os = ""
+    }
+
+    # Determine OS of toolchain, which is the builtin argument "current_os".
+    toolchain_os = invoker_toolchain_args.current_os
+
     toolchain(target_name) {
+      # Uncomment this line to see which toolchains generate other toolchains.
+      # print("Generating toolchain: ${target_name} by ${current_toolchain}")
+
       assert(defined(invoker.cc), "toolchain is missing 'cc'")
       tool("asm") {
+        if (pw_command_launcher != "") {
+          command_launcher = pw_command_launcher
+        }
         depfile = "{{output}}.d"
         command = string_join(" ",
                               [
@@ -66,13 +122,16 @@ template("generate_toolchain") {
       }
 
       tool("cc") {
+        if (pw_command_launcher != "") {
+          command_launcher = pw_command_launcher
+        }
         depfile = "{{output}}.d"
         command = string_join(" ",
                               [
                                 invoker.cc,
                                 "-MMD -MF $depfile",  # Write out dependencies.
-                                "{{cflags_c}}",
                                 "{{cflags}}",
+                                "{{cflags_c}}",  # Must come after {{cflags}}.
                                 "{{defines}}",
                                 "{{include_dirs}}",
                                 "-c {{source}}",
@@ -87,13 +146,16 @@ template("generate_toolchain") {
 
       assert(defined(invoker.cxx), "toolchain is missing 'cxx'")
       tool("cxx") {
+        if (pw_command_launcher != "") {
+          command_launcher = pw_command_launcher
+        }
         depfile = "{{output}}.d"
         command = string_join(" ",
                               [
                                 invoker.cxx,
                                 "-MMD -MF $depfile",  # Write out dependencies.
-                                "{{cflags_cc}}",
                                 "{{cflags}}",
+                                "{{cflags_cc}}",  # Must come after {{cflags}}.
                                 "{{defines}}",
                                 "{{include_dirs}}",
                                 "-c {{source}}",
@@ -106,14 +168,72 @@ template("generate_toolchain") {
         ]
       }
 
+      tool("objc") {
+        if (pw_command_launcher != "") {
+          command_launcher = pw_command_launcher
+        }
+        depfile = "{{output}}.d"
+        command =
+            string_join(" ",
+                        [
+                          invoker.cc,
+                          "-MMD -MF $depfile",  # Write out dependencies.
+                          "{{cflags}}",
+                          "{{cflags_objc}}",  # Must come after {{cflags}}.
+                          "{{defines}}",
+                          "{{include_dirs}}",
+                          "{{framework_dirs}}",
+                          "-c {{source}}",
+                          "-o {{output}}",
+                        ])
+        depsformat = "gcc"
+        description = "objc {{output}}"
+        outputs = [
+          "{{source_out_dir}}/{{target_output_name}}.{{source_file_part}}.o",
+        ]
+      }
+
+      tool("objcxx") {
+        if (pw_command_launcher != "") {
+          command_launcher = pw_command_launcher
+        }
+        depfile = "{{output}}.d"
+        command =
+            string_join(" ",
+                        [
+                          invoker.cxx,
+                          "-MMD -MF $depfile",  # Write out dependencies.
+                          "{{cflags}}",
+                          "{{cflags_objcc}}",  # Must come after {{cflags}}.
+                          "{{defines}}",
+                          "{{include_dirs}}",
+                          "{{framework_dirs}}",
+                          "-c {{source}}",
+                          "-o {{output}}",
+                        ])
+        depsformat = "gcc"
+        description = "objc++ {{output}}"
+        outputs = [
+          "{{source_out_dir}}/{{target_output_name}}.{{source_file_part}}.o",
+        ]
+      }
+
       assert(defined(invoker.ar), "toolchain is missing 'ar'")
       tool("alink") {
-        command = "rm -f {{output}} && ${invoker.ar} rcs {{output}} {{inputs}}"
+        if (host_os == "win") {
+          rspfile = "{{output}}.rsp"
+          rspfile_content = "{{inputs}}"
+          rm_command = "del /F /Q \"{{output}}\" 2> NUL"
+          command = "cmd /c \"($rm_command) & ${invoker.ar} {{arflags}} rcs {{output}} @$rspfile\""
+        } else {
+          command = "rm -f {{output}} && ${invoker.ar} {{arflags}} rcs {{output}} {{inputs}}"
+        }
+
         description = "ar {{target_output_name}}{{output_extension}}"
-        outputs = [
-          "{{target_out_dir}}/lib/{{target_output_name}}{{output_extension}}",
-        ]
+        outputs =
+            [ "{{output_dir}}/{{target_output_name}}{{output_extension}}" ]
         default_output_extension = ".a"
+        default_output_dir = "{{target_out_dir}}/lib"
       }
 
       lib_switch = "-l"
@@ -127,9 +247,7 @@ template("generate_toolchain") {
         "{{ldflags}}",
       ]
 
-      is_host_toolchain =
-          defined(invoker.is_host_toolchain) && invoker.is_host_toolchain
-      if (is_host_toolchain && host_os == "mac") {
+      if (toolchain_os == "mac" || toolchain_os == "ios") {
         _link_flags += [
           # Output a map file that shows symbols and their location.
           "-Wl,-map,$_link_mapfile",
@@ -147,7 +265,15 @@ template("generate_toolchain") {
         ]
       }
 
-      _link_flags += [ "{{inputs}}" ]
+      _rsp_file = "$_link_outfile.rsp"
+      _rsp_contents = []
+
+      _link_group = defined(invoker.link_group) && invoker.link_group
+      if (_link_group) {
+        _rsp_contents += [ "-Wl,--start-group" ]
+      }
+      _rsp_contents += [ "{{inputs}}" ]
+      _rsp_contents += [ "{{frameworks}}" ]
 
       if (defined(invoker.link_whole_archive) && invoker.link_whole_archive) {
         # Load all object files from all libraries to resolve symbols.
@@ -158,26 +284,39 @@ template("generate_toolchain") {
         # Make sure you use this with --gc-sections, otherwise the
         # resulting binary will contain every symbol defined in every
         # input file and every static library. That could be quite a lot.
-        _link_flags += [
+        _rsp_contents += [
           "-Wl,--whole-archive",
           "{{libs}}",
           "-Wl,--no-whole-archive",
         ]
       } else {
-        _link_flags += [ "{{libs}}" ]
+        _rsp_contents += [ "{{libs}}" ]
       }
 
+      if (_link_group) {
+        _rsp_contents += [ "-Wl,--end-group" ]
+      }
+      _rsp_command = string_join(" ", _rsp_contents)
+
+      _link_flags += [ "@$_rsp_file" ]
       _link_flags += [ "-o $_link_outfile" ]
 
       _link_command = string_join(" ", _link_flags)
 
       tool("link") {
         command = _link_command
+        rspfile = _rsp_file
+        rspfile_content = _rsp_command
         description = "ld $_link_outfile"
-        outputs = [ _link_outfile ]
+        outputs = [
+          _link_outfile,
+          _link_mapfile,
+        ]
         default_output_dir = "{{target_out_dir}}/bin"
 
-        if (is_host_toolchain && host_os == "win") {
+        if (defined(invoker.final_binary_extension)) {
+          default_output_extension = invoker.final_binary_extension
+        } else if (toolchain_os == "win") {
           default_output_extension = ".exe"
         } else {
           default_output_extension = ""
@@ -186,24 +325,29 @@ template("generate_toolchain") {
 
       tool("solink") {
         command = _link_command + " -shared"
+        rspfile = _rsp_file
+        rspfile_content = _rsp_command
         description = "ld -shared $_link_outfile"
-        outputs = [ _link_outfile ]
+        outputs = [
+          _link_outfile,
+          _link_mapfile,
+        ]
         default_output_dir = "{{target_out_dir}}/lib"
         default_output_extension = ".so"
       }
 
       tool("stamp") {
-        if (host_os == "win") {
-          command = "cmd /c type nul > \"{{output}}\""
-        } else {
-          command = "touch {{output}}"
-        }
-        description = "stamp {{output}}"
+        # GN-ism: GN gets mad if you directly forward the contents of
+        # pw_universal_stamp.
+        _stamp = pw_universal_stamp
+        forward_variables_from(_stamp, "*")
       }
 
       tool("copy") {
-        command = "cp -af {{source}} {{output}}"
-        description = "cp {{source}} {{output}}"
+        # GN-ism: GN gets mad if you directly forward the contents of
+        # pw_universal_copy.
+        _copy = pw_universal_copy
+        forward_variables_from(_copy, "*")
       }
 
       # Build arguments to be overridden when compiling cross-toolchain:
@@ -215,14 +359,23 @@ template("generate_toolchain") {
       #   pw_toolchain_SCOPE: A copy of the invoker scope that defines the
       #     toolchain. Used for generating derivative toolchains.
       #
-      assert(defined(invoker.defaults), "toolchain is missing 'defaults'")
       toolchain_args = {
         pw_toolchain_SCOPE = {
         }
         pw_toolchain_SCOPE = {
           forward_variables_from(invoker, "*")
+          name = target_name
         }
-        forward_variables_from(invoker.defaults, "*")
+        forward_variables_from(invoker_toolchain_args, "*")
+      }
+    }
+
+    _generate_static_analysis_toolchain =
+        defined(invoker.static_analysis) && invoker.static_analysis
+
+    if (_generate_static_analysis_toolchain) {
+      pw_static_analysis_toolchain(target_name + ".static_analysis") {
+        forward_variables_from(invoker, "*")
       }
     }
   } else {

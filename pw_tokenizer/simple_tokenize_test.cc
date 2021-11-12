@@ -36,7 +36,7 @@ uint32_t TestHash(const char (&str)[kSize])
   uint32_t coefficient = k65599HashConstant;
 
   size_t length =
-      std::min(static_cast<size_t>(PW_TOKENIZER_CFG_HASH_LENGTH), kSize - 1);
+      std::min(static_cast<size_t>(PW_TOKENIZER_CFG_C_HASH_LENGTH), kSize - 1);
 
   // Hash all of the characters in the string as unsigned ints.
   // The coefficient calculation is done modulo 0x100000000, so the unsigned
@@ -50,19 +50,19 @@ uint32_t TestHash(const char (&str)[kSize])
 }
 
 TEST(TokenizeStringLiteral, EmptyString_IsZero) {
-  constexpr pw_TokenizerStringToken token = PW_TOKENIZE_STRING("");
-  EXPECT_TRUE(0u == token);
+  constexpr pw_tokenizer_Token token = PW_TOKENIZE_STRING("");
+  EXPECT_EQ(0u, token);
 }
 
 TEST(TokenizeStringLiteral, String_MatchesHash) {
   constexpr uint32_t token = PW_TOKENIZE_STRING("[:-)");
-  EXPECT_TRUE(TestHash("[:-)") == token);
+  EXPECT_EQ(TestHash("[:-)"), token);
 }
 
 constexpr uint32_t kGlobalToken = PW_TOKENIZE_STRING(">:-[]");
 
 TEST(TokenizeStringLiteral, GlobalVariable_MatchesHash) {
-  EXPECT_TRUE(TestHash(">:-[]") == kGlobalToken);
+  EXPECT_EQ(TestHash(">:-[]"), kGlobalToken);
 }
 
 class TokenizeToBuffer : public ::testing::Test {
@@ -80,7 +80,7 @@ template <typename Impl>
 class GlobalMessage : public ::testing::Test {
  public:
   static void SetMessage(const uint8_t* message, size_t size) {
-    ASSERT_TRUE(size <= sizeof(message_));
+    ASSERT_LE(size, sizeof(message_));
     std::memcpy(message_, message, size);
     message_size_bytes_ = size;
   }
@@ -124,8 +124,8 @@ TEST_F(TokenizeToCallback, Variety) {
                    0x5C                     // char '.' (0x2E, zig-zag encoded)
                    >("%s there are %x (%.2f) of them%c");
   // clang-format on
-  ASSERT_TRUE(expected.size() == message_size_bytes_);
-  EXPECT_TRUE(std::memcmp(expected.data(), message_, expected.size()) == 0);
+  ASSERT_EQ(expected.size(), message_size_bytes_);
+  EXPECT_EQ(std::memcmp(expected.data(), message_, expected.size()), 0);
 }
 
 class TokenizeToGlobalHandler : public GlobalMessage<TokenizeToGlobalHandler> {
@@ -135,19 +135,19 @@ TEST_F(TokenizeToGlobalHandler, Variety) {
   PW_TOKENIZE_TO_GLOBAL_HANDLER("%x%lld%1.2f%s", 0, 0ll, -0.0, "");
   const auto expected =
       ExpectedData<0, 0, 0x00, 0x00, 0x00, 0x80, 0>("%x%lld%1.2f%s");
-  ASSERT_TRUE(expected.size() == message_size_bytes_);
-  EXPECT_TRUE(std::memcmp(expected.data(), message_, expected.size()) == 0);
+  ASSERT_EQ(expected.size(), message_size_bytes_);
+  EXPECT_EQ(std::memcmp(expected.data(), message_, expected.size()), 0);
 }
 
-extern "C" void pw_TokenizerHandleEncodedMessage(const uint8_t* encoded_message,
-                                                 size_t size_bytes) {
+extern "C" void pw_tokenizer_HandleEncodedMessage(
+    const uint8_t* encoded_message, size_t size_bytes) {
   TokenizeToGlobalHandler::SetMessage(encoded_message, size_bytes);
 }
 
 class TokenizeToGlobalHandlerWithPayload
     : public GlobalMessage<TokenizeToGlobalHandlerWithPayload> {
  public:
-  static void SetPayload(pw_TokenizerPayload payload) {
+  static void SetPayload(pw_tokenizer_Payload payload) {
     payload_ = static_cast<intptr_t>(payload);
   }
 
@@ -160,31 +160,36 @@ class TokenizeToGlobalHandlerWithPayload
 intptr_t TokenizeToGlobalHandlerWithPayload::payload_;
 
 TEST_F(TokenizeToGlobalHandlerWithPayload, Variety) {
-  ASSERT_TRUE(payload_ != 123);
+  ASSERT_NE(payload_, 123);
 
   const auto expected =
       ExpectedData<0, 0, 0x00, 0x00, 0x00, 0x80, 0>("%x%lld%1.2f%s");
 
   PW_TOKENIZE_TO_GLOBAL_HANDLER_WITH_PAYLOAD(
-      static_cast<pw_TokenizerPayload>(123), "%x%lld%1.2f%s", 0, 0ll, -0.0, "");
-  ASSERT_TRUE(expected.size() == message_size_bytes_);
-  EXPECT_TRUE(std::memcmp(expected.data(), message_, expected.size()) == 0);
-  EXPECT_TRUE(payload_ == 123);
-
-  PW_TOKENIZE_TO_GLOBAL_HANDLER_WITH_PAYLOAD(
-      static_cast<pw_TokenizerPayload>(-543),
+      static_cast<pw_tokenizer_Payload>(123),
       "%x%lld%1.2f%s",
       0,
       0ll,
       -0.0,
       "");
-  ASSERT_TRUE(expected.size() == message_size_bytes_);
-  EXPECT_TRUE(std::memcmp(expected.data(), message_, expected.size()) == 0);
-  EXPECT_TRUE(payload_ == -543);
+  ASSERT_EQ(expected.size(), message_size_bytes_);
+  EXPECT_EQ(std::memcmp(expected.data(), message_, expected.size()), 0);
+  EXPECT_EQ(payload_, 123);
+
+  PW_TOKENIZE_TO_GLOBAL_HANDLER_WITH_PAYLOAD(
+      static_cast<pw_tokenizer_Payload>(-543),
+      "%x%lld%1.2f%s",
+      0,
+      0ll,
+      -0.0,
+      "");
+  ASSERT_EQ(expected.size(), message_size_bytes_);
+  EXPECT_EQ(std::memcmp(expected.data(), message_, expected.size()), 0);
+  EXPECT_EQ(payload_, -543);
 }
 
-extern "C" void pw_TokenizerHandleEncodedMessageWithPayload(
-    pw_TokenizerPayload payload,
+extern "C" void pw_tokenizer_HandleEncodedMessageWithPayload(
+    pw_tokenizer_Payload payload,
     const uint8_t* encoded_message,
     size_t size_bytes) {
   TokenizeToGlobalHandlerWithPayload::SetMessage(encoded_message, size_bytes);

@@ -14,6 +14,7 @@
 #pragma once
 
 #include <iterator>
+#include <type_traits>
 
 namespace pw {
 
@@ -50,14 +51,20 @@ class Iterator {
   constexpr const T* operator->() const { return static_cast<T*>(item_); }
   constexpr T* operator->() { return static_cast<T*>(item_); }
 
-  constexpr bool operator==(const Iterator& rhs) const {
+  template <typename U, typename J>
+  constexpr bool operator==(const Iterator<U, J>& rhs) const {
     return item_ == rhs.item_;
   }
-  constexpr bool operator!=(const Iterator& rhs) const {
+
+  template <typename U, typename J>
+  constexpr bool operator!=(const Iterator<U, J>& rhs) const {
     return item_ != rhs.item_;
   }
 
  private:
+  template <typename, typename>
+  friend class Iterator;
+
   template <typename>
   friend class ::pw::IntrusiveList;
 
@@ -71,7 +78,9 @@ class List {
  public:
   class Item {
    protected:
-    constexpr Item() : Item(nullptr) {}
+    constexpr Item() : Item(this) {}
+
+    ~Item() { unlist(); }
 
    private:
     friend class List;
@@ -81,6 +90,15 @@ class List {
 
     constexpr Item(Item* next) : next_(next) {}
 
+    bool unlisted() const { return this == next_; }
+
+    // Unlink this from the list it is apart of, if any. Specifying prev saves
+    // calling previous(), which requires looping around the cycle.
+    void unlist(Item* prev = nullptr);
+
+    Item* previous();  // Note: O(n) since it loops around the cycle.
+
+    // The next pointer. Unlisted items must be self-cycles (next_ == this).
     Item* next_;
   };
 
@@ -94,8 +112,6 @@ class List {
   // Intrusive lists cannot be copied, since each Item can only be in one list.
   List(const List&) = delete;
   List& operator=(const List&) = delete;
-
-  ~List() { clear(); }
 
   template <typename Iterator>
   void assign(Iterator first, Iterator last) {
@@ -124,6 +140,8 @@ class List {
   constexpr Item* end() noexcept { return &head_; }
   constexpr const Item* end() const noexcept { return &head_; }
 
+  size_t size() const;
+
  private:
   template <typename Iterator>
   void AssignFromIterator(Iterator first, Iterator last);
@@ -149,6 +167,22 @@ void List::AssignFromIterator(Iterator first, Iterator last) {
     }
   }
 }
+
+// Gets the element type from an Item. This is used to check that an
+// IntrusiveList element class inherits from Item, either directly or through
+// another class.
+template <typename T, bool kIsItem = std::is_base_of<List::Item, T>()>
+struct GetListElementTypeFromItem {
+  using Type = void;
+};
+
+template <typename T>
+struct GetListElementTypeFromItem<T, true> {
+  using Type = typename T::PwIntrusiveListElementType;
+};
+
+template <typename T>
+using ElementTypeFromItem = typename GetListElementTypeFromItem<T>::Type;
 
 }  // namespace intrusive_list_impl
 }  // namespace pw

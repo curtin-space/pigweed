@@ -28,16 +28,42 @@ import platform
 import ssl
 import subprocess
 import sys
+import base64
 
 try:
-    import httplib
+    import httplib  # type: ignore
 except ImportError:
-    import http.client as httplib  # type: ignore
+    import http.client as httplib  # type: ignore[no-redef]
 
 try:
-    import urlparse  # Python 2.
+    import urlparse  # type: ignore
 except ImportError:
-    import urllib.parse as urlparse  # type: ignore
+    import urllib.parse as urlparse  # type: ignore[no-redef]
+
+# Generated from the following command. May need to be periodically rerun.
+# $ cipd ls infra/tools/cipd | perl -pe "s[.*/][];s/^/    '/;s/\s*$/',\n/;"
+SUPPORTED_PLATFORMS = (
+    'aix-ppc64',
+    'linux-386',
+    'linux-amd64',
+    'linux-arm64',
+    'linux-armv6l',
+    'linux-mips64',
+    'linux-mips64le',
+    'linux-mipsle',
+    'linux-ppc64',
+    'linux-ppc64le',
+    'linux-s390x',
+    'mac-amd64',
+    'mac-arm64',
+    'windows-386',
+    'windows-amd64',
+)
+
+
+class UnsupportedPlatform(Exception):
+    pass
+
 
 try:
     SCRIPT_DIR = os.path.dirname(__file__)
@@ -96,7 +122,10 @@ def arch_normalized():
 
     machine = platform.machine()
     if machine.startswith(('arm', 'aarch')):
-        return machine.replace('aarch', 'arm')
+        machine = machine.replace('aarch', 'arm')
+        if machine == 'arm64':
+            return machine
+        return 'armv6l'
     if machine.endswith('64'):
         return 'amd64'
     if machine.endswith('86'):
@@ -145,6 +174,29 @@ def expected_hash():
                                                    DIGESTS_FILE))
 
 
+def https_connect_with_proxy(target_url):
+    """Create HTTPSConnection with proxy support."""
+
+    proxy_env = os.environ.get('HTTPS_PROXY') or os.environ.get('https_proxy')
+    if proxy_env in (None, ''):
+        conn = httplib.HTTPSConnection(target_url)
+        return conn
+
+    url = urlparse.urlparse(proxy_env)
+    conn = httplib.HTTPSConnection(url.hostname, url.port)
+    headers = {}
+    if url.username and url.password:
+        auth = '%s:%s' % (url.username, url.password)
+        py_version = sys.version_info.major
+        if py_version >= 3:
+            headers['Proxy-Authorization'] = 'Basic ' + str(
+                base64.b64encode(auth.encode()).decode())
+        else:
+            headers['Proxy-Authorization'] = 'Basic ' + base64.b64encode(auth)
+    conn.set_tunnel(target_url, 443, headers)
+    return conn
+
+
 def client_bytes():
     """Pull down the CIPD client and return it as a bytes object.
 
@@ -157,7 +209,7 @@ def client_bytes():
         version = ins.read().strip()
 
     try:
-        conn = httplib.HTTPSConnection(CIPD_HOST)
+        conn = https_connect_with_proxy(CIPD_HOST)
     except AttributeError:
         print('=' * 70)
         print('''
@@ -171,10 +223,11 @@ brew uninstall python && brew install python
         print('=' * 70)
         raise
 
-    path = '/client?platform={platform}-{arch}&version={version}'.format(
-        platform=platform_normalized(),
-        arch=arch_normalized(),
-        version=version)
+    full_platform = '{}-{}'.format(platform_normalized(), arch_normalized())
+    if full_platform not in SUPPORTED_PLATFORMS:
+        raise UnsupportedPlatform(full_platform)
+
+    path = '/client?platform={}&version={}'.format(full_platform, version)
 
     for _ in range(10):
         try:
@@ -191,11 +244,20 @@ brew uninstall python && brew install python
                 '\n'
                 '    sudo pip install certifi\n'
                 '\n'
+                'And if on the system Python on a Mac try\n'
+                '\n'
+                '    /Applications/Python 3.6/Install Certificates.command\n'
+                '\n'
                 'If using Homebrew Python try\n'
                 '\n'
                 '    brew install openssl\n'
                 '    brew uninstall python\n'
                 '    brew install python\n'
+                '\n'
+                "If those don't work, address all the potential issues shown \n"
+                'by the following command.\n'
+                '\n'
+                '    brew doctor\n'
                 '\n'
                 "Otherwise, check that your machine's Python can use SSL, "
                 'testing with the httplib module on Python 2 or http.client on '
@@ -212,14 +274,15 @@ brew uninstall python && brew install python
             location = res.getheader('location')
             url = urlparse.urlparse(location)
             if url.netloc != conn.host:
-                conn = httplib.HTTPSConnection(url.netloc)
+                conn = https_connect_with_proxy(url.netloc)
             path = '{}?{}'.format(url.path, url.query)
 
         # Some kind of error in this response.
         else:
             break
 
-    raise Exception('failed to download client')
+    raise Exception('failed to download client from https://{}{}'.format(
+        CIPD_HOST, path))
 
 
 def bootstrap(client, silent=('PW_ENVSETUP_QUIET' in os.environ)):
@@ -260,26 +323,46 @@ def selfupdate(client):
     subprocess.check_call(cmd)
 
 
-def init(install_dir=DEFAULT_INSTALL_DIR, silent=False):
-    """Install/update cipd client."""
-
-    os.environ['CIPD_HTTP_USER_AGENT_PREFIX'] = user_agent()
-
+def _default_client(install_dir):
     client = os.path.join(install_dir, 'cipd')
     if os.name == 'nt':
         client += '.exe'
+    return client
+
+
+def init(install_dir=DEFAULT_INSTALL_DIR, silent=False, client=None):
+    """Install/update cipd client."""
+
+    if not client:
+        client = _default_client(install_dir)
+
+    os.environ['CIPD_HTTP_USER_AGENT_PREFIX'] = user_agent()
+
+    if not os.path.isfile(client):
+        bootstrap(client, silent)
 
     try:
-        if not os.path.isfile(client):
-            bootstrap(client, silent)
+        selfupdate(client)
+    except subprocess.CalledProcessError:
+        print('CIPD selfupdate failed. Bootstrapping then retrying...',
+              file=sys.stderr)
+        bootstrap(client)
+        selfupdate(client)
 
-        try:
-            selfupdate(client)
-        except subprocess.CalledProcessError:
-            print('CIPD selfupdate failed. Bootstrapping then retrying...',
-                  file=sys.stderr)
-            bootstrap(client)
-            selfupdate(client)
+    return client
+
+
+def main(install_dir=DEFAULT_INSTALL_DIR, silent=False):
+    """Install/update cipd client."""
+
+    client = _default_client(install_dir)
+
+    try:
+        init(install_dir=install_dir, silent=silent, client=client)
+
+    except UnsupportedPlatform:
+        # Don't show help message below for this exception.
+        raise
 
     except Exception:
         print('Failed to initialize CIPD. Run '
@@ -297,5 +380,5 @@ def init(install_dir=DEFAULT_INSTALL_DIR, silent=False):
 
 
 if __name__ == '__main__':
-    client_exe = init()
+    client_exe = main()
     subprocess.check_call([client_exe] + sys.argv[1:])

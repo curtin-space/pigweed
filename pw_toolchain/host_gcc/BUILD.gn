@@ -12,7 +12,6 @@
 # License for the specific language governing permissions and limitations under
 # the License.
 
-# gn-format disable
 import("//build_overrides/pigweed.gni")
 
 # Disable obnoxious ABI warning.
@@ -40,4 +39,10 @@ config("mingw_z_format") {
     # version of MinGW that uses the new flags.
     cflags = [ "-D__USE_MINGW_ANSI_STDIO=1" ]
   }
+}
+
+# GCC needs the -pthread option to support multithreading. This must be
+# specified to build e.g. pw_thread_stl.
+config("threading_support") {
+  ldflags = [ "-pthread" ]
 }

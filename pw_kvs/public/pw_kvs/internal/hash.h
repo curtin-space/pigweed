@@ -14,12 +14,15 @@
 #pragma once
 
 #include <cstddef>
-#include <string_view>
 
-namespace pw::kvs::internal {
+#include "pw_kvs/key.h"
+
+namespace pw {
+namespace kvs {
+namespace internal {
 
 // The hash function used to hash keys.
-constexpr uint32_t Hash(std::string_view string) {
+constexpr uint32_t Hash(Key string) {
   uint32_t hash = 0;
   uint32_t coefficient = 65599u;
 
@@ -31,4 +34,6 @@ constexpr uint32_t Hash(std::string_view string) {
   return hash;
 }
 
-}  // namespace pw::kvs::internal
+}  // namespace internal
+}  // namespace kvs
+}  // namespace pw

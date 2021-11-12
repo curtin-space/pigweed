@@ -16,37 +16,43 @@
 #include <cstddef>
 #include <cstdint>
 
-#include "pw_rpc/internal/call.h"
-
 namespace pw::rpc {
 
-// The ServerContext collects context for an RPC being invoked on a server. The
-// ServerContext is passed into RPC functions and is user-facing.
+class ServerContext;
+
+namespace internal {
+
+ServerContext& GlobalServerContextStub();
+
+}  // namespace internal
+
+// The ServerContext class is DEPRECATED and will be removed from pw_rpc. All
+// information formerly in the ServerContext is accessible through the
+// ServerReader/Writer object.
 //
-// The ServerContext is a public-facing view of the internal::ServerCall class.
-// It uses inheritance to avoid copying or creating an extra reference to the
-// underlying ServerCall. Private inheritance prevents exposing the
-// internal-facing ServerCall interface.
-class ServerContext : private internal::ServerCall {
+// The only case where the information in a ServerContext is not available is
+// synchronous unary RPCs. If information like channel_id() is needed in a unary
+// RPC, just use an asynchronous unary RPC.
+class ServerContext {
  public:
-  // Returns the ID for the channel this RPC is using.
-  uint32_t channel_id() const { return channel().id(); }
-
-  constexpr ServerContext() = delete;
-
   constexpr ServerContext(const ServerContext&) = delete;
   constexpr ServerContext& operator=(const ServerContext&) = delete;
 
   constexpr ServerContext(ServerContext&&) = delete;
   constexpr ServerContext& operator=(ServerContext&&) = delete;
 
-  friend class internal::ServerCall;  // Allow down-casting from ServerCall.
+ private:
+  constexpr ServerContext() = default;
+
+  // Allow GlobalServerContextStub() to create a global instance.
+  friend ServerContext& internal::GlobalServerContextStub();
 };
 
 namespace internal {
 
-inline ServerContext& ServerCall::context() {
-  return static_cast<ServerContext&>(*this);
+inline ServerContext& GlobalServerContextStub() {
+  static ServerContext global_server_context_stub;
+  return global_server_context_stub;
 }
 
 }  // namespace internal

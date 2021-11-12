@@ -1,4 +1,4 @@
-// Copyright 2020 The Pigweed Authors
+// Copyright 2021 The Pigweed Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License"); you may not
 // use this file except in compliance with the License. You may obtain a copy of
@@ -38,9 +38,9 @@ namespace pw {
 // Usage:
 //
 //   class TestItem
-//      : public containers::IntrusiveList<TestItem>::Item {}
+//      : public IntrusiveList<TestItem>::Item {}
 //
-//   containers::IntrusiveList<TestItem> test_items;
+//   IntrusiveList<TestItem> test_items;
 //
 //   auto item = TestItem();
 //   test_items.push_back(item);
@@ -48,12 +48,25 @@ namespace pw {
 //   for (auto& test_item : test_items) {
 //     // Do a thing.
 //   }
+//
 template <typename T>
 class IntrusiveList {
  public:
   class Item : public intrusive_list_impl::List::Item {
+   public:
+    Item(const Item&) = delete;
+    Item& operator=(const Item&) = delete;
+
    protected:
     constexpr Item() = default;
+
+   private:
+    // GetListElementTypeFromItem is used to find the element type from an item.
+    // It is used to ensure list items inherit from the correct Item type.
+    template <typename, bool>
+    friend struct intrusive_list_impl::GetListElementTypeFromItem;
+
+    using PwIntrusiveListElementType = T;
   };
 
   using element_type = T;
@@ -64,18 +77,20 @@ class IntrusiveList {
   using const_iterator =
       intrusive_list_impl::Iterator<std::add_const_t<T>, const Item>;
 
-  constexpr IntrusiveList() = default;
+  constexpr IntrusiveList() { CheckItemType(); }
 
   // Constructs an IntrusiveList from an iterator over Items. The iterator may
   // dereference as either Item& (e.g. from std::array<Item>) or Item* (e.g.
   // from std::initializer_list<Item*>).
   template <typename Iterator>
-  IntrusiveList(Iterator first, Iterator last) : list_(first, last) {}
+  IntrusiveList(Iterator first, Iterator last) : list_(first, last) {
+    CheckItemType();
+  }
 
   // Constructs an IntrusiveList from a std::initializer_list of pointers to
   // items.
   IntrusiveList(std::initializer_list<Item*> items)
-      : list_(items.begin(), items.end()) {}
+      : IntrusiveList(items.begin(), items.end()) {}
 
   template <typename Iterator>
   void assign(Iterator first, Iterator last) {
@@ -143,7 +158,19 @@ class IntrusiveList {
   }
   const_iterator cend() const noexcept { return end(); }
 
+  // Operation is O(size).
+  size_t size() const { return list_.size(); }
+
  private:
+  // Check that T is an Item in a function, since the class T will not be fully
+  // defined when the IntrusiveList<T> class is instantiated.
+  static constexpr void CheckItemType() {
+    static_assert(
+        std::is_base_of<intrusive_list_impl::ElementTypeFromItem<T>, T>(),
+        "IntrusiveList items must be derived from IntrusiveList<T>::Item, "
+        "where T is the item or one of its bases.");
+  }
+
   intrusive_list_impl::List list_;
 };
 

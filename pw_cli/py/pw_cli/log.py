@@ -11,10 +11,11 @@
 # WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 # License for the specific language governing permissions and limitations under
 # the License.
-"""Configure the system logger for the default pw command log format."""
+"""Tools for configuring Python logging."""
 
 import logging
-from typing import NamedTuple, Optional
+from pathlib import Path
+from typing import NamedTuple, Optional, Union, Iterator
 
 import pw_cli.color
 import pw_cli.env
@@ -23,8 +24,11 @@ import pw_cli.plugins
 # Log level used for captured output of a subprocess run through pw.
 LOGLEVEL_STDOUT = 21
 
+# Log level indicating a irrecoverable failure.
+LOGLEVEL_FATAL = 70
 
-class LogLevel(NamedTuple):
+
+class _LogLevel(NamedTuple):
     level: int
     color: str
     ascii: str
@@ -33,31 +37,34 @@ class LogLevel(NamedTuple):
 
 # Shorten all the log levels to 3 characters for column-aligned logs.
 # Color the logs using ANSI codes.
-# pylint: disable=bad-whitespace
-# yapf: disable
 _LOG_LEVELS = (
-    LogLevel(logging.CRITICAL, 'bold_red', 'CRT', '☠️ '),
-    LogLevel(logging.ERROR,    'red',      'ERR', '❌'),
-    LogLevel(logging.WARNING,  'yellow',   'WRN', '⚠️ '),
-    LogLevel(logging.INFO,     'magenta',  'INF', 'ℹ️ '),
-    LogLevel(LOGLEVEL_STDOUT,  'cyan',     'OUT', '💬'),
-    LogLevel(logging.DEBUG,    'blue',     'DBG', '👾'),
-)
-# yapf: enable
-# pylint: enable=bad-whitespace
+    _LogLevel(LOGLEVEL_FATAL,   'bold_red',     'FTL', '☠️ '),
+    _LogLevel(logging.CRITICAL, 'bold_magenta', 'CRT', '‼️ '),
+    _LogLevel(logging.ERROR,    'red',          'ERR', '❌'),
+    _LogLevel(logging.WARNING,  'yellow',       'WRN', '⚠️ '),
+    _LogLevel(logging.INFO,     'magenta',      'INF', 'ℹ️ '),
+    _LogLevel(LOGLEVEL_STDOUT,  'cyan',         'OUT', '💬'),
+    _LogLevel(logging.DEBUG,    'blue',         'DBG', '👾'),
+)  # yapf: disable
 
 _LOG = logging.getLogger(__name__)
 _STDERR_HANDLER = logging.StreamHandler()
 
 
+def c_to_py_log_level(c_level: int) -> int:
+    """Converts pw_log C log-level macros to Python logging levels."""
+    return c_level * 10
+
+
 def main() -> None:
-    """Show how logs look at various levels."""
+    """Shows how logs look at various levels."""
 
     # Force the log level to make sure all logs are shown.
     _LOG.setLevel(logging.DEBUG)
 
     # Log one message for every log level.
-    _LOG.critical('Something terrible has happened!')
+    _LOG.log(LOGLEVEL_FATAL, 'An irrecoverable error has occurred!')
+    _LOG.critical('Something important has happened!')
     _LOG.error('There was an error on our last operation')
     _LOG.warning('Looks like something is amiss; consider investigating')
     _LOG.info('The operation went as expected')
@@ -65,10 +72,48 @@ def main() -> None:
     _LOG.debug('Adding 1 to i')
 
 
-def install(level: int = logging.INFO,
-            use_color: Optional[bool] = None,
-            hide_timestamp: bool = False) -> None:
-    """Configure the system logger for the default pw command log format."""
+def _setup_handler(handler: logging.Handler, formatter: logging.Formatter,
+                   level: Union[str, int], logger: logging.Logger) -> None:
+    handler.setLevel(level)
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+
+
+def install(level: Union[str, int] = logging.INFO,
+            use_color: bool = None,
+            hide_timestamp: bool = False,
+            log_file: Union[str, Path] = None,
+            logger: Optional[logging.Logger] = None) -> None:
+    """Configures the system logger for the default pw command log format.
+
+    If you have Python loggers separate from the root logger you can use
+    `pw_cli.log.install` to get the Pigweed log formatting there too. For
+    example: ::
+
+        import logging
+
+        import pw_cli.log
+
+        pw_cli.log.install(
+            level=logging.INFO,
+            use_color=True,
+            hide_timestamp=False,
+            log_file=(Path.home() / 'logs.txt'),
+            logger=logging.getLogger(__package__),
+        )
+
+    Args:
+      level: The logging level to apply. Default: `logging.INFO`.
+      use_color: When `True` include ANSI escape sequences to colorize log
+          messages.
+      hide_timestamp: When `True` omit timestamps from the log formatting.
+      log_file: File to save logs into.
+      logger: Python Logger instance to install Pigweed formatting into.
+          Defaults to the Python root logger: `logging.getLogger()`.
+
+    """
+    if not logger:
+        logger = logging.getLogger()
 
     colors = pw_cli.color.colors(use_color)
 
@@ -83,16 +128,20 @@ def install(level: int = logging.INFO,
         # colored text.
         timestamp_fmt = colors.black_on_white('%(asctime)s') + ' '
 
-    # Set log level on root logger to debug, otherwise any higher levels
-    # elsewhere are ignored.
-    root = logging.getLogger()
-    root.setLevel(logging.DEBUG)
+    formatter = logging.Formatter(timestamp_fmt + '%(levelname)s %(message)s',
+                                  '%Y%m%d %H:%M:%S')
 
-    _STDERR_HANDLER.setLevel(level)
-    _STDERR_HANDLER.setFormatter(
-        logging.Formatter(timestamp_fmt + '%(levelname)s %(message)s',
-                          '%Y%m%d %H:%M:%S'))
-    root.addHandler(_STDERR_HANDLER)
+    # Set the log level on the root logger to NOTSET, so that all logs
+    # propagated from child loggers are handled.
+    logging.getLogger().setLevel(logging.NOTSET)
+
+    # Always set up the stderr handler, even if it isn't used.
+    _setup_handler(_STDERR_HANDLER, formatter, level, logger)
+
+    if log_file:
+        _setup_handler(logging.FileHandler(log_file), formatter, level, logger)
+        # Since we're using a file, filter logs out of the stderr handler.
+        _STDERR_HANDLER.setLevel(logging.CRITICAL + 1)
 
     if env.PW_EMOJI:
         name_attr = 'emoji'
@@ -106,9 +155,19 @@ def install(level: int = logging.INFO,
         logging.addLevelName(log_level.level, colorize(log_level)(name))
 
 
-def set_level(log_level: int):
-    """Sets the log level for logs to stderr."""
-    _STDERR_HANDLER.setLevel(log_level)
+def all_loggers() -> Iterator[logging.Logger]:
+    """Iterates over all loggers known to Python logging."""
+    manager = logging.getLogger().manager  # type: ignore[attr-defined]
+
+    for logger_name in manager.loggerDict:  # pylint: disable=no-member
+        yield logging.getLogger(logger_name)
+
+
+def set_all_loggers_minimum_level(level: int) -> None:
+    """Increases the log level to the specified value for all known loggers."""
+    for logger in all_loggers():
+        if logger.isEnabledFor(level - 1):
+            logger.setLevel(level)
 
 
 if __name__ == '__main__':
