@@ -36,6 +36,7 @@ pw_cc_library(
     ],
     includes = ["public"],
     deps = [
+        "//pw_polyfill:overrides",
         "//pw_preprocessor",
         "//pw_span",
         "//pw_status",
