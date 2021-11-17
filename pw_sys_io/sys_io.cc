@@ -16,24 +16,10 @@
 
 namespace pw::sys_io {
 
-StatusWithSize ReadBytes(std::span<std::byte> dest) {
-  for (size_t i = 0; i < dest.size_bytes(); ++i) {
-    Status result = ReadByte(&dest[i]);
-    if (!result.ok()) {
-      return StatusWithSize(result, i);
-    }
-  }
-  return StatusWithSize(dest.size_bytes());
-}
+StatusWithSize ReadBytes(std::span<std::byte> dest) { return Receive(dest); }
 
 StatusWithSize WriteBytes(std::span<const std::byte> src) {
-  for (size_t i = 0; i < src.size_bytes(); ++i) {
-    Status result = WriteByte(src[i]);
-    if (!result.ok()) {
-      return StatusWithSize(result, i);
-    }
-  }
-  return StatusWithSize(src.size_bytes());
+  return Transmit(src);
 }
 
 }  // namespace pw::sys_io

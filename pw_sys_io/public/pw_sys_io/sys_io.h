@@ -45,15 +45,13 @@
 
 namespace pw::sys_io {
 
-// Read a single byte from the sys io backend.
-// Implemented by: Backend
-//
-// This function will block until it either succeeds or fails to read a byte
-// from the pw_sys_io backend.
-//
-// Returns OkStatus() - A byte was successfully read.
-//         Status::ResourceExhausted() - if the underlying source vanished.
-Status ReadByte(std::byte* dest);
+/**
+ * @brief Receive bytes into destination
+ *
+ * @param dest Writable byte span over destination to receive into
+ * @return StatusWithSize Status with encoded number of bytes received
+ */
+StatusWithSize Receive(std::span<std::byte> dest);
 
 // Read a single byte from the sys io backend, if available.
 // Implemented by: Backend
@@ -63,14 +61,13 @@ Status ReadByte(std::byte* dest);
 //         Status::Unimplemented() - Not supported on this target.
 Status TryReadByte(std::byte* dest);
 
-// Write a single byte out the sys io backend.
-// Implemented by: Backend
-//
-// This function will block until it either succeeds or fails to write a byte
-// out the pw_sys_io backend.
-//
-// Returns OkStatus() if a byte was successfully read.
-Status WriteByte(std::byte b);
+/**
+ * @brief Transmit bytes from source
+ *
+ * @param src Immutable byte span over source to write from
+ * @return StatusWithSize Status with encoded number of bytes transmitted
+ */
+StatusWithSize Transmit(std::span<const std::byte> src);
 
 // Write a string out the sys io backend.
 // Implemented by: Backend
