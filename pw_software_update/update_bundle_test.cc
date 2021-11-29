@@ -38,7 +38,8 @@ class TestBundledUpdateBackend final : public BundledUpdateBackend {
  public:
   TestBundledUpdateBackend() {}
 
-  Status FinalizeApply() override { return OkStatus(); }
+  Status ApplyReboot() override { return Status::Unimplemented(); }
+  Status PostRebootFinalize() override { return OkStatus(); }
 
   Status ApplyTargetFile(std::string_view, stream::Reader&, size_t) override {
     return OkStatus();

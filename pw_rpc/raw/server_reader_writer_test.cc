@@ -17,6 +17,7 @@
 #include "gtest/gtest.h"
 #include "pw_rpc/raw/fake_channel_output.h"
 #include "pw_rpc/service.h"
+#include "pw_rpc/writer.h"
 #include "pw_rpc_test_protos/test.raw_rpc.pb.h"
 
 namespace pw::rpc {
@@ -24,22 +25,25 @@ namespace pw::rpc {
 class TestServiceImpl final
     : public test::generated::TestService<TestServiceImpl> {
  public:
-  static StatusWithSize TestUnaryRpc(ServerContext&, ConstByteSpan, ByteSpan) {
+  static StatusWithSize TestUnaryRpc(ConstByteSpan, ByteSpan) {
     return StatusWithSize(0);
   }
 
-  void TestAnotherUnaryRpc(ServerContext&, ConstByteSpan, RawUnaryResponder&) {}
+  void TestAnotherUnaryRpc(ConstByteSpan, RawUnaryResponder&) {}
 
-  void TestServerStreamRpc(ServerContext&, ConstByteSpan, RawServerWriter&) {}
+  void TestServerStreamRpc(ConstByteSpan, RawServerWriter&) {}
 
-  void TestClientStreamRpc(ServerContext&, RawServerReader&) {}
+  void TestClientStreamRpc(RawServerReader&) {}
 
-  void TestBidirectionalStreamRpc(ServerContext&, RawServerReaderWriter&) {}
+  void TestBidirectionalStreamRpc(RawServerReaderWriter&) {}
 };
 
 struct ReaderWriterTestContext {
+  static constexpr uint32_t kChannelId = 1;
+
   ReaderWriterTestContext()
-      : channel(Channel::Create<1>(&output)), server(std::span(&channel, 1)) {}
+      : channel(Channel::Create<kChannelId>(&output)),
+        server(std::span(&channel, 1)) {}
 
   TestServiceImpl service;
   RawFakeChannelOutput<4, 128> output;
@@ -154,6 +158,46 @@ TEST(RawUnaryResponder, OutOfScope_FinishesActiveCall) {
   const auto completions = ctx.output.completions<TestService::TestUnaryRpc>();
   ASSERT_EQ(completions.size(), 1u);
   EXPECT_EQ(completions.back(), OkStatus());
+}
+
+constexpr const char kWriterData[] = "20X6";
+
+void WriteAsWriter(Writer& writer) {
+  ASSERT_TRUE(writer.active());
+  ASSERT_EQ(writer.channel_id(), ReaderWriterTestContext::kChannelId);
+
+  EXPECT_EQ(OkStatus(), writer.Write(std::as_bytes(std::span(kWriterData))));
+}
+
+TEST(RawServerWriter, UsableAsWriter) {
+  ReaderWriterTestContext ctx;
+  RawServerWriter call =
+      RawServerWriter::Open<TestService::TestServerStreamRpc>(
+          ctx.server, ctx.channel.id(), ctx.service);
+
+  WriteAsWriter(call);
+
+  EXPECT_STREQ(reinterpret_cast<const char*>(
+                   ctx.output.payloads<TestService::TestServerStreamRpc>()
+                       .back()
+                       .data()),
+               kWriterData);
+}
+
+TEST(RawServerReaderWriter, UsableAsWriter) {
+  ReaderWriterTestContext ctx;
+  RawServerReaderWriter call =
+      RawServerReaderWriter::Open<TestService::TestBidirectionalStreamRpc>(
+          ctx.server, ctx.channel.id(), ctx.service);
+
+  WriteAsWriter(call);
+
+  EXPECT_STREQ(
+      reinterpret_cast<const char*>(
+          ctx.output.payloads<TestService::TestBidirectionalStreamRpc>()
+              .back()
+              .data()),
+      kWriterData);
 }
 
 }  // namespace pw::rpc

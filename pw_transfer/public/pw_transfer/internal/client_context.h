@@ -27,28 +27,9 @@ class Client;
 
 namespace internal {
 
-// TODO(pwbug/547): Remove this temporary class once RPC supports generic
-// writers.
-class RawClientWriter final : public RawWriter {
- public:
-  constexpr RawClientWriter() : writer_(nullptr) {}
-  constexpr RawClientWriter(rpc::RawClientReaderWriter& writer)
-      : writer_(&writer) {}
-
-  uint32_t channel_id() const final { return writer_->channel_id(); }
-  ByteSpan PayloadBuffer() final { return writer_->PayloadBuffer(); }
-  void ReleaseBuffer() final { writer_->ReleaseBuffer(); }
-  Status Write(ConstByteSpan data) final { return writer_->Write(data); }
-
-  void set_writer(rpc::RawClientReaderWriter& writer) { writer_ = &writer; }
-
- private:
-  rpc::RawClientReaderWriter* writer_;
-};
-
 class ClientContext : public Context {
  public:
-  constexpr ClientContext()
+  ClientContext()
       : internal::Context(OnCompletion),
         client_(nullptr),
         on_completion_(nullptr) {}
@@ -56,25 +37,30 @@ class ClientContext : public Context {
   constexpr bool is_read_transfer() const { return type() == kReceive; }
   constexpr bool is_write_transfer() const { return type() == kTransmit; }
 
-  constexpr Client& client() {
+  Client& client() {
     PW_DASSERT(active());
     return *client_;
   }
 
   void StartRead(Client& client,
                  uint32_t transfer_id,
+                 work_queue::WorkQueue& work_queue,
                  stream::Writer& writer,
                  rpc::RawClientReaderWriter& stream,
-                 Function<void(Status)>&& on_completion);
+                 Function<void(Status)>&& on_completion,
+                 chrono::SystemClock::duration chunk_timeout);
 
   void StartWrite(Client& client,
                   uint32_t transfer_id,
+                  work_queue::WorkQueue& work_queue,
                   stream::Reader& reader,
                   rpc::RawClientReaderWriter& stream,
-                  Function<void(Status)>&& on_completion);
+                  Function<void(Status)>&& on_completion,
+                  chrono::SystemClock::duration chunk_timeout);
 
   void Finish(Status status) {
     PW_DASSERT(active());
+    set_transfer_state(TransferState::kCompleted);
     if (on_completion_ != nullptr) {
       on_completion_(status);
     }
@@ -89,7 +75,6 @@ class ClientContext : public Context {
 
   Client* client_;
   Function<void(Status)> on_completion_;
-  RawClientWriter writer_;
 };
 
 }  // namespace internal

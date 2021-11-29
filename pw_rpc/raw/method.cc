@@ -16,7 +16,6 @@
 
 #include <cstring>
 
-#include "pw_log/log.h"
 #include "pw_rpc/internal/packet.h"
 
 namespace pw::rpc::internal {
@@ -24,7 +23,7 @@ namespace pw::rpc::internal {
 void RawMethod::SynchronousUnaryInvoker(const CallContext& context,
                                         const Packet& request) {
   RawUnaryResponder responder(context);
-  std::span payload_buffer = responder.AcquirePayloadBuffer();
+  std::span payload_buffer = responder.PayloadBuffer();
 
   StatusWithSize sws =
       static_cast<const RawMethod&>(context.method())

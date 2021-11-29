@@ -23,33 +23,11 @@
 
 namespace pw::transfer::internal {
 
-// TODO(pwbug/547): Remove this temporary class once RPC supports generic
-// writers.
-class RawServerWriter final : public RawWriter {
- public:
-  constexpr RawServerWriter() : writer_(nullptr) {}
-  constexpr RawServerWriter(rpc::RawServerReaderWriter& writer)
-      : writer_(&writer) {}
-
-  uint32_t channel_id() const final { return writer_->channel_id(); }
-  ByteSpan PayloadBuffer() final { return writer_->PayloadBuffer(); }
-  void ReleaseBuffer() final { writer_->ReleaseBuffer(); }
-  Status Write(ConstByteSpan data) final { return writer_->Write(data); }
-
-  void set_writer(rpc::RawServerReaderWriter& writer) { writer_ = &writer; }
-
- private:
-  rpc::RawServerReaderWriter* writer_;
-};
-
-struct Chunk;
-
 // Transfer context for use within the transfer service (server-side). Stores a
 // pointer to a transfer handler when active to stream the transfer data.
 class ServerContext : public Context {
  public:
-  constexpr ServerContext()
-      : Context(OnCompletion), type_(kRead), handler_(nullptr) {}
+  ServerContext() : Context(OnCompletion), type_(kRead), handler_(nullptr) {}
 
   // Begins a new transfer with the specified type and handler. Calls into the
   // handler's Prepare method.
@@ -57,7 +35,10 @@ class ServerContext : public Context {
   // Precondition: Context is not already active.
   Status Start(TransferType type,
                Handler& handler,
-               rpc::RawServerReaderWriter& stream);
+               work_queue::WorkQueue& work_queue,
+               rpc::RawServerReaderWriter& stream,
+               chrono::SystemClock::duration timeout,
+               uint8_t max_retries);
 
   // Ends the transfer with the given status, calling the handler's Finalize
   // method. No chunks are sent.
@@ -74,14 +55,13 @@ class ServerContext : public Context {
 
   TransferType type_;
   Handler* handler_;
-  RawServerWriter writer_;
 };
 
 // A fixed-size pool of allocatable transfer contexts.
 class ServerContextPool {
  public:
-  constexpr ServerContextPool(TransferType type,
-                              IntrusiveList<internal::Handler>& handlers)
+  ServerContextPool(TransferType type,
+                    IntrusiveList<internal::Handler>& handlers)
       : type_(type), handlers_(handlers) {}
 
   // Looks up an active context by ID. If none exists, tries to allocate and
@@ -93,7 +73,10 @@ class ServerContextPool {
   //   RESOURCE_EXHAUSTED - Out of transfer context slots.
   //
   Result<ServerContext*> StartTransfer(uint32_t transfer_id,
-                                       rpc::RawServerReaderWriter& stream);
+                                       work_queue::WorkQueue& work_queue,
+                                       rpc::RawServerReaderWriter& stream,
+                                       chrono::SystemClock::duration timeout,
+                                       uint8_t max_retries);
 
   Result<ServerContext*> GetPendingTransfer(uint32_t transfer_id);
 

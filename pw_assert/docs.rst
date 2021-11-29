@@ -37,8 +37,11 @@ The ``pw_assert`` API provides three classes of macros:
     PW_CHECK_INT_LE(ItemCount(), 100);
     PW_CHECK_INT_LE(ItemCount(), 100, "System state: %s", GetStateStr());
 
+  To ensure compatibility with :ref:`module-pw_assert_log` and
+  :ref:`module-pw_log_tokenized`, the message must be a string literal.
+
 Example
--------
+=======
 
 .. code-block:: cpp
 
@@ -66,7 +69,7 @@ Example
     // This assert is always enabled, even in production.
     PW_CHECK_INT_LE(ItemCount(), 100);
 
-    // This assert disabled for release builds, where NDEBUG is defined.
+    // This assert is enabled based on ``PW_ASSERT_ENABLE_DEBUG``.
     // The functions ItemCount() and GetStateStr() are never called.
     PW_DCHECK_INT_LE(ItemCount(), 100, "System state: %s", GetStateStr());
 
@@ -75,8 +78,8 @@ Example
   Use ``PW_ASSERT`` from ``pw_assert/assert.h`` for asserts in headers or
   asserting in ``constexpr`` contexts.
 
-Structure of assert modules
----------------------------
+Structure of Assert Modules
+===========================
 The module is split into two components:
 
 1. The **facade** (this module) which is only a macro interface layer, and
@@ -124,8 +127,8 @@ invoke to assert. These macros are found in the ``pw_assert/check.h`` header.
   Assert that a condition is true, optionally including a message with
   arguments to report if the codition is false.
 
-  The ``DCHECK`` variants only run if ``NDEBUG`` is defined; otherwise, the
-  entire statement is removed (and the expression not evaluated).
+  The ``DCHECK`` variants only run if ``PW_ASSERT_ENABLE_DEBUG`` is enabled;
+  otherwise, the entire statement is removed (and the expression not evaluated).
 
   Example:
 
@@ -169,8 +172,8 @@ invoke to assert. These macros are found in the ``pw_assert/check.h`` header.
   Assert that the given pointer is not ``NULL``, optionally including a message
   with arguments to report if the pointer is ``NULL``.
 
-  The ``DCHECK`` variants only run if ``NDEBUG`` is defined; otherwise, the
-  entire statement is removed (and the expression not evaluated).
+  The ``DCHECK`` variants only run if ``PW_ASSERT_ENABLE_DEBUG`` is enabled;
+  otherwise, the entire statement is removed (and the expression not evaluated).
 
   .. code-block:: cpp
 
@@ -191,8 +194,8 @@ invoke to assert. These macros are found in the ``pw_assert/check.h`` header.
   If present, the optional format message is reported on failure. Depending on
   the backend, values of ``a`` and ``b`` will also be reported.
 
-  The ``DCHECK`` variants only run if ``NDEBUG`` is defined; otherwise, the
-  entire statement is removed (and the expression not evaluated).
+  The ``DCHECK`` variants only run if ``PW_ASSERT_ENABLE_DEBUG`` is enabled;
+  otherwise, the entire statement is removed (and the expression not evaluated).
 
   Example, with no message:
 
@@ -265,7 +268,8 @@ invoke to assert. These macros are found in the ``pw_assert/check.h`` header.
   +-------------------------+--------------+-----------+-----------------------+
 
   The above ``CHECK_*_*()`` are also available in DCHECK variants, which will
-  only evaluate their arguments and trigger if the ``NDEBUG`` macro is defined.
+  only evaluate their arguments and trigger if the ``PW_ASSERT_ENABLE_DEBUG``
+  macro is enabled.
 
   +--------------------------+--------------+-----------+----------------------+
   | Macro                    | a, b type    | condition | a, b format          |
@@ -340,8 +344,8 @@ invoke to assert. These macros are found in the ``pw_assert/check.h`` header.
   .. note::
     This also asserts that ``abs_tolerance >= 0``.
 
-  The ``DCHECK`` variants only run if ``NDEBUG`` is defined; otherwise, the
-  entire statement is removed (and the expression not evaluated).
+  The ``DCHECK`` variants only run if ``PW_ASSERT_ENABLE_DEBUG`` is enabled;
+  otherwise, the entire statement is removed (and the expression not evaluated).
 
   Example, with no message:
 
@@ -365,8 +369,8 @@ invoke to assert. These macros are found in the ``pw_assert/check.h`` header.
   ``PW_STATUS_OK`` (in C). Optionally include a message with arguments to
   report.
 
-  The ``DCHECK`` variants only run if ``NDEBUG`` is defined; otherwise, the
-  entire statement is removed (and the expression not evaluated).
+  The ``DCHECK`` variants only run if ``PW_ASSERT_ENABLE_DEBUG`` is defined;
+  otherwise, the entire statement is removed (and the expression not evaluated).
 
   .. code-block:: cpp
 
@@ -415,7 +419,7 @@ are **no format messages, no captured line number, no captured file, no captured
 expression, or anything other than a binary indication of failure**.
 
 Example
--------
+=======
 
 .. code-block:: cpp
 
@@ -437,8 +441,8 @@ Example
     }
   };
 
-PW_ASSERT API reference
------------------------
+PW_ASSERT API Reference
+=======================
 .. cpp:function:: PW_ASSERT(condition)
 
   A header- and constexpr-safe version of ``PW_CHECK()``.
@@ -451,7 +455,7 @@ PW_ASSERT API reference
 
   A header- and constexpr-safe version of ``PW_DCHECK()``.
 
-  Same as ``PW_ASSERT()``, except that if ``PW_ASSERT_ENABLE_DEBUG == 1``, the
+  Same as ``PW_ASSERT()``, except that if ``PW_ASSERT_ENABLE_DEBUG == 0``, the
   assert is disabled and condition is not evaluated.
 
 .. attention::
@@ -464,16 +468,16 @@ PW_ASSERT API reference
 
   Use ``PW_CHECK_*()`` whenever possible.
 
-PW_ASSERT API backend
----------------------
+PW_ASSERT API Backend
+=====================
 The ``PW_ASSERT`` API ultimately calls the C function
 ``pw_assert_HandleFailure()``, which must be provided by the ``pw_assert``
 backend. The ``pw_assert_HandleFailure()`` function must not return.
 
 .. _module-pw_assert-circular-deps:
 
-Avoiding circular dependencies with ``PW_ASSERT``
--------------------------------------------------
+Avoiding Circular Dependencies With ``PW_ASSERT``
+=================================================
 Because asserts are so widely used, including in low-level libraries, it is
 common for the ``pw_assert`` backend to cause circular dependencies. Because of
 this, assert backends may avoid declaring explicit dependencies, instead relying
@@ -500,7 +504,6 @@ to directly provide dependencies through include paths only, rather than GN
 -----------
 Backend API
 -----------
-
 The backend controls what to do in the case of an assertion failure. In the
 most basic cases, the backend could display the assertion failure on something
 like sys_io and halt in a while loop waiting for a debugger. In other cases,
@@ -582,8 +585,8 @@ header, but instead is in a ``.cc`` file.
   file, expression, or other rich assert information. Backends should do
   something reasonable in this case; typically, capturing the stack is useful.
 
-Backend build targets
----------------------
+Backend Build Targets
+=====================
 In GN, the backend must provide a ``pw_assert.impl`` build target in the same
 directory as the backend target. If the main backend target's dependencies would
 cause dependency cycles, the actual backend implementation with its full
@@ -593,11 +596,11 @@ common problem with ``pw_assert`` because it is so widely used. See
 :ref:`module-pw_assert-circular-deps`.
 
 --------------------------
-Frequently asked questions
+Frequently Asked Questions
 --------------------------
 
 When should DCHECK_* be used instead of CHECK_* and vice versa?
----------------------------------------------------------------
+===============================================================
 There is no hard and fast rule for when to use one or the other.
 
 In theory, ``DCHECK_*`` macros should never be used and all the asserts should
@@ -646,7 +649,7 @@ Pigweed uses these conventions to decide between ``CHECK_*`` and ``DCHECK_*``:
   mistake; so use error codes in those cases instead.
 
 How should objects be asserted against or compared?
----------------------------------------------------
+===================================================
 Unfortunately, there is no native mechanism for this, and instead the way to
 assert object states or comparisons is with the normal ``PW_CHECK_*`` macros
 that operate on booleans, ints, and floats.
@@ -660,7 +663,7 @@ leads to binary bloat even with tokenization. So it is likely that a rich
 object assert API won't be added.
 
 Why was the assert facade designed this way?
---------------------------------------------
+============================================
 The Pigweed assert API was designed taking into account the needs of several
 past projects the team members were involved with. Based on those experiences,
 the following were key requirements for the API:
@@ -693,13 +696,28 @@ facade & backend arrangement, since the backend must provide the raw macros for
 asserting in that case, rather than terminating at a C-style API.
 
 Why isn't there a ``PW_CHECK_LE``? Why is the type (e.g. ``INT``) needed?
--------------------------------------------------------------------------
+=========================================================================
 The problem with asserts like ``PW_CHECK_LE(a, b)`` instead of
 ``PW_CHECK_INT_LE(a, b)`` or ``PW_CHECK_FLOAT_EXACT_LE(a, b)`` is that to
 capture the arguments with the tokenizer, we need to know the types. Using the
 preprocessor, it is impossible to dispatch based on the types of ``a`` and
 ``b``, so unfortunately having a separate macro for each of the types commonly
 asserted on is necessary.
+
+----------------------------
+Module Configuration Options
+----------------------------
+The following configurations can be adjusted via compile-time configuration of
+this module, see the
+:ref:`module documentation <module-structure-compile-time-configuration>` for
+more details.
+
+.. c:macro:: PW_ASSERT_ENABLE_DEBUG
+
+  Controls whether ``DCHECK`` and ``DASSERT`` are enabled.
+
+  This defaults to being disabled if ``NDEBUG`` is defined, else it is enabled
+  by default.
 
 -------------
 Compatibility
@@ -717,8 +735,8 @@ backends. In some cases, the backends will have backends (like
 
 Below is a brief summary of what modules are ready for use:
 
-Available assert backends
--------------------------
+Available Assert Backends
+=========================
 - ``pw_assert`` - **Stable** - The assert facade (this module). This module is
   stable, and in production use. The documentation is comprehensive and covers
   the functionality. There are (a) tests for the facade macro processing logic,
@@ -738,8 +756,8 @@ Note: If one desires a null assert module (where asserts are removed), use
 ``pw_assert_log`` in combination with ``pw_log_null``. This will direct asserts
 to logs, then the logs are removed due to the null backend.
 
-Missing functionality
----------------------
+Missing Functionality
+=====================
 - **Stack traces** - Pigweed doesn't have a reliable stack walker, which makes
   displaying a stack trace on crash harder. We plan to add this eventually.
 - **Snapshot integration** - Pigweed doesn't yet have a rich system state

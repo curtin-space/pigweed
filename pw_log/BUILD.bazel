@@ -27,6 +27,7 @@ licenses(["notice"])
 pw_cc_facade(
     name = "facade",
     hdrs = [
+        "public/pw_log/config.h",
         "public/pw_log/levels.h",
         "public/pw_log/log.h",
         "public/pw_log/options.h",
@@ -58,7 +59,7 @@ pw_cc_library(
     deps = [
         ":facade",
         "//pw_bytes",
-        "//pw_log_tokenized",
+        "//pw_log_tokenized:metadata",
         "//pw_result",
     ],
 )
@@ -70,7 +71,10 @@ proto_library(
     ],
     import_prefix = "pw_log/proto",
     strip_import_prefix = "//pw_log",
-    deps = ["//pw_tokenizer:tokenizer_proto"],
+    deps = [
+        "//pw_protobuf:common_protos",
+        "//pw_tokenizer:tokenizer_proto",
+    ],
 )
 
 pw_proto_library(

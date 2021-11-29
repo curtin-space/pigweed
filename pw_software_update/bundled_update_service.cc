@@ -71,7 +71,6 @@ constexpr std::string_view kUserManifestTargetFileName = "user_manifest";
 }  // namespace
 
 Status BundledUpdateService::GetStatus(
-    ServerContext&,
     const pw_protobuf_Empty&,
     pw_software_update_BundledUpdateStatus& response) {
   std::lock_guard lock(mutex_);
@@ -80,7 +79,6 @@ Status BundledUpdateService::GetStatus(
 }
 
 Status BundledUpdateService::Start(
-    ServerContext&,
     const pw_software_update_StartRequest& request,
     pw_software_update_BundledUpdateStatus& response) {
   std::lock_guard lock(mutex_);
@@ -191,7 +189,6 @@ void BundledUpdateService::DoVerify() {
 }
 
 Status BundledUpdateService::Verify(
-    ServerContext&,
     const pw_protobuf_Empty&,
     pw_software_update_BundledUpdateStatus& response) {
   std::lock_guard lock(mutex_);
@@ -222,7 +219,7 @@ Status BundledUpdateService::Verify(
     return OkStatus();
   }
 
-  // The backend's FinalizeApply as part of DoApply() shall be configured
+  // The backend's ApplyReboot as part of DoApply() shall be configured
   // such that this RPC can send out the reply before the device reboots.
   const Status status = work_queue_.PushWork([this] {
     {
@@ -248,7 +245,6 @@ Status BundledUpdateService::Verify(
 }
 
 Status BundledUpdateService::Apply(
-    ServerContext&,
     const pw_protobuf_Empty&,
     pw_software_update_BundledUpdateStatus& response) {
   std::lock_guard lock(mutex_);
@@ -277,7 +273,7 @@ Status BundledUpdateService::Apply(
     return OkStatus();
   }
 
-  // The backend's FinalizeApply as part of DoApply() shall be configured
+  // The backend's ApplyReboot as part of DoApply() shall be configured
   // such that this RPC can send out the reply before the device reboots.
   const Status status = work_queue_.PushWork([this] {
     {
@@ -446,18 +442,18 @@ void BundledUpdateService::DoApply() {
     }
   }
 
+  // TODO(davidrogers): Add new APPLY_REBOOTING to distinguish between pre and
+  // post reboot.
+
   // Finalize the apply.
-  //
-  // TODO(davidrogers): Ensure the backend documentation and API contract is
-  // clear in regards to the flushing expectations for RPCs and logs surrounding
-  // the reboot inside of this call.
-  if (const Status status = backend_.FinalizeApply(); !status.ok()) {
+  if (const Status status = backend_.ApplyReboot(); !status.ok()) {
     SET_ERROR(pw_software_update_BundledUpdateResult_Enum_APPLY_FAILED,
-              "Failed to apply target file: %d",
+              "Failed to do the apply reboot: %d",
               static_cast<int>(status.code()));
     return;
   }
 
+  // TODO(davidrogers): Move this to MaybeFinishApply() once available.
   status_.current_state_progress_hundreth_percent = 0;
   status_.has_current_state_progress_hundreth_percent = false;
   status_.state = pw_software_update_BundledUpdateState_Enum_FINISHED;
@@ -465,7 +461,6 @@ void BundledUpdateService::DoApply() {
 }
 
 Status BundledUpdateService::Abort(
-    ServerContext&,
     const pw_protobuf_Empty&,
     pw_software_update_BundledUpdateStatus& response) {
   std::lock_guard lock(mutex_);
@@ -489,7 +484,6 @@ Status BundledUpdateService::Abort(
 }
 
 Status BundledUpdateService::Reset(
-    ServerContext&,
     const pw_protobuf_Empty&,
     pw_software_update_BundledUpdateStatus& response) {
   std::lock_guard lock(mutex_);

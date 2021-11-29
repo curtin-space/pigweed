@@ -184,6 +184,8 @@ Arguments
 ---------
 - ``packages`` - List of ``pw_python_package`` targets whose wheels should be
   included; their dependencies will be pulled in as wheels also.
+- ``directory`` - Output directory for the collected wheels. Defaults to
+  ``$target_out_dir/$target_name``.
 
 Wheel collection under the hood
 -------------------------------
@@ -193,19 +195,6 @@ out which wheels to collect by traversing the ``pw_python_package_wheels``
 `GN metadata
 <https://gn.googlesource.com/gn/+/HEAD/docs/reference.md#var_metadata>`_ key,
 which lists the output directory for each wheel.
-
-The ``pw_mirror_tree`` template is then used to collect wheels in an output
-directory:
-
-.. code-block::
-
-  import("$dir_pw_build/mirror_tree.gni")
-
-  pw_mirror_tree("my_wheels") {
-    path_data_keys = [ "pw_python_package_wheels" ]
-    deps = [ ":python_packages.wheel" ]
-    directory = "$root_out_dir/the_wheels"
-  }
 
 pw_python_zip_with_setup
 ========================

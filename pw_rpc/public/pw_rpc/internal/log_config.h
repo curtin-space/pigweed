@@ -1,4 +1,4 @@
-// Copyright 2020 The Pigweed Authors
+// Copyright 2021 The Pigweed Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License"); you may not
 // use this file except in compliance with the License. You may obtain a copy of
@@ -11,18 +11,11 @@
 // WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
 // License for the specific language governing permissions and limitations under
 // the License.
+
+// Configuration macros for the pw_rpc module.
 #pragma once
 
-// PW_ASSERT_ENABLE_DEBUG controls whether DCHECKs and DASSERTs are enabled.
-//
-// This block defines PW_ASSERT_ENABLE_DEBUG if it is not already, taking into
-// account traditional NDEBUG macro.
-#if !defined(PW_ASSERT_ENABLE_DEBUG)
-#if defined(NDEBUG)
-// Release mode; remove all DCHECK*() and DASSERT() asserts.
-#define PW_ASSERT_ENABLE_DEBUG 0
-#else
-// Debug mode; keep all DCHECK*() and DASSERT() asserts.
-#define PW_ASSERT_ENABLE_DEBUG 1
-#endif  // defined (NDEBUG)
-#endif  // !defined(PW_ASSERT_ENABLE_DEBUG)
+#include "pw_rpc/internal/config.h"
+
+#define PW_LOG_LEVEL PW_RPC_CONFIG_LOG_LEVEL
+#define PW_LOG_MODULE_NAME PW_RPC_CONFIG_LOG_MODULE_NAME

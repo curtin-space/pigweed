@@ -12,7 +12,11 @@
 // License for the specific language governing permissions and limitations under
 // the License.
 
+// clang-format off
+#include "pw_rpc/internal/log_config.h" // PW_LOG_* macros must be first.
+
 #include "pw_rpc/server.h"
+// clang-format on
 
 #include <algorithm>
 #include <mutex>
@@ -20,7 +24,6 @@
 #include "pw_log/log.h"
 #include "pw_rpc/internal/endpoint.h"
 #include "pw_rpc/internal/packet.h"
-#include "pw_rpc/server_context.h"
 
 namespace pw::rpc {
 namespace {
