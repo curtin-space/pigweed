@@ -171,38 +171,6 @@ filegroup(
     srcs = ["client_integration_test.cc"],
 )
 
-# TODO(pwbug/507): Cannot build nanopb-dependent code in Bazel at the moment. Need
-# to determine how best to support Nanopb builds and protobuf generation.
-filegroup(
-    name = "nanopb",
-    srcs = [
-        "nanopb/client_call_test.cc",
-        "nanopb/client_integration_test.cc",
-        "nanopb/client_reader_writer_test.cc",
-        "nanopb/codegen_test.cc",
-        "nanopb/common.cc",
-        "nanopb/echo_service_test.cc",
-        "nanopb/method.cc",
-        "nanopb/method_info_test.cc",
-        "nanopb/method_lookup_test.cc",
-        "nanopb/method_test.cc",
-        "nanopb/method_union_test.cc",
-        "nanopb/public/pw_rpc/echo_service_nanopb.h",
-        "nanopb/public/pw_rpc/nanopb/client_reader_writer.h",
-        "nanopb/public/pw_rpc/nanopb/client_testing.h",
-        "nanopb/public/pw_rpc/nanopb/fake_channel_output.h",
-        "nanopb/public/pw_rpc/nanopb/internal/common.h",
-        "nanopb/public/pw_rpc/nanopb/internal/method.h",
-        "nanopb/public/pw_rpc/nanopb/internal/method_union.h",
-        "nanopb/public/pw_rpc/nanopb/server_reader_writer.h",
-        "nanopb/public/pw_rpc/nanopb/test_method_context.h",
-        "nanopb/pw_rpc_nanopb_private/internal_test_utils.h",
-        "nanopb/server_reader_writer.cc",
-        "nanopb/server_reader_writer_test.cc",
-        "nanopb/stub_generation_test.cc",
-    ],
-)
-
 pw_cc_test(
     name = "call_test",
     srcs = [

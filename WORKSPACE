@@ -308,3 +308,9 @@ rules_fuzzing_init()
 load("@build_bazel_rules_nodejs//toolchains/esbuild:esbuild_repositories.bzl", "esbuild_repositories")
 
 esbuild_repositories(npm_repository = "npm")  # Note, npm is the default value for npm_repository
+
+git_repository(
+    name = "nanopb",
+    commit = "13666952914f3cf43a70c6b9738a7dc0dd06a6dc",
+    remote = "https://github.com/nanopb/nanopb",
+)
