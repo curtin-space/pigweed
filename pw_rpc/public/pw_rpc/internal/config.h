@@ -26,7 +26,7 @@
 // the client stream ends. The callback is included in all ServerReader/Writer
 // objects as a pw::Function, so may have a significant cost.
 #ifndef PW_RPC_CLIENT_STREAM_END_CALLBACK
-#define PW_RPC_CLIENT_STREAM_END_CALLBACK 0
+#define PW_RPC_CLIENT_STREAM_END_CALLBACK 1
 #endif  // PW_RPC_CLIENT_STREAM_END_CALLBACK
 
 // The Nanopb-based pw_rpc implementation allocates memory to use for Nanopb
