@@ -85,7 +85,7 @@ pw_proto_library(
 pw_cc_library(
     name = "backend_multiplexer",
     visibility = ["@pigweed_config//:__pkg__"],
-    deps = ["//pw_log_basic"],
+    deps = ["//pw_log_null"],
 )
 
 pw_cc_test(
