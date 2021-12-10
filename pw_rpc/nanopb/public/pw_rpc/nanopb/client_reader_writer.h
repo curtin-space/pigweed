@@ -319,6 +319,8 @@ class NanopbClientWriter
 
   using internal::Call::Cancel;
 
+  using internal::Call::EndClientStream;
+
  private:
   friend class internal::NanopbUnaryResponseClientCall<Response>;
 
